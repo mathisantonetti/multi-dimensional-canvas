@@ -40,7 +40,7 @@ function cutline(model, params, ad_inf, line, a, b, n0, i)
         Y[j, 1:(i-1)] = line[1:(i-1)]
         Y[j, i] = c[j]
         Y[j, (i+1):dim] = line[i:(dim-1)]
-        if(model(Y[j, :], params) <= ad_inf)
+        if(model(Y[j, :], params) <= ad_inf) # majority election
             if(count > countmax)
                 M = c[j] - (b-a)/(2n0)
                 m = c[j - count] - (b-a)/(2n0)
@@ -54,6 +54,7 @@ function cutline(model, params, ad_inf, line, a, b, n0, i)
     return Y, m, M
 end
 
+# fills the holes with one point
 function quad_fill(dim, m, M)
     Y = zeros((2^dim, dim))
     if(dim >= 2)
@@ -86,25 +87,37 @@ function adaptative_grid_lin(model, params, ad_inf, a, b, nbpoints, n0, dim)
     return X
 end
 
-# Tools
+# Toymodels
 
-# params = [center (2D-Vector), interior radius, exterior radius], example : params = [[0.5, 0.5], 0.4, 0.8]
+# params = [center (Vector), interior radius (positive number), exterior radius (positive number)], example : params = [[0.5, 0.5], 0.4, 0.8]
 function ball_model(x, params)
     return (norm(x - params[1]) < params[2]) || (norm(x - params[1]) > params[3])
 end
 
+# params = [[limit_1_inf, limit_1_sup], ..., [limit_d_inf, limit_d_sup]], example : params = [[0.0, 1.0], [0.0, 1.0]] gives the cube [0, 1]^2
 function cube_model(x, params)
-    return x[1]*x[2] > 0
+    d = length(x)
+    for i=1:d
+        if(params[i][1] > x[i] || x[i] > params[i][2]) # if x is not in the "cube"
+            return 0.0 # False
+        end
+    end
+    return 1.0 # True
 end
 
+# Calculus tools
+
+# logarithm adapted to eps (because it converges toward -infinity when x converges toward 0)
 function invexp(x, eps)
     return log(eps)*(0 <= x <= eps) + log(x)*(x > eps)
 end
 
+# metric distance
 function d(x, y)
     return norm(x - y)
 end
 
+# distance matrix
 function M(X, p)
     n = size(X, 1)
     Mat = zeros(n, n)
@@ -116,6 +129,23 @@ function M(X, p)
     return Mat
 end
 
+# metric linear interpolation
+function interpolation_lin(model, params, X, p)
+    N = size(X, 1)
+    beta = [model(X[i, :], params) for i=1:N]
+    return M(X, p)\beta
+end
+
+# metric pseudo-gaussian interpolation (almost the same)
+function interpolation_exp(X, p, model, eps)
+    N = size(X, 1)
+    beta = [invexp(model(X[i, :]), eps) for i=1:N]
+    return M(X, p)\beta
+end
+
+# Converting Tools
+
+# translates a List into a Tuple (for scatter use)
 function ListToTuple(X)
     N = size(X, 1)
     newL = fill((1.0, 1.0), N)
@@ -125,13 +155,14 @@ function ListToTuple(X)
     return newL
 end
 
-function works(model, params, X)
+# separates points working and points not working (depending on the eval_inf (sensibility value))
+function works(model, params, eval_inf, X)
     N = size(X, 1)
     d = length(X[1, :])
-    Id0 = zeros(Int64, 0)
-    Id1 = zeros(Int64, 0)
+    Id0 = zeros(Int64, 0) # points working
+    Id1 = zeros(Int64, 0) # points not working
     for i=1:N
-        if(model(X[i, :], params))
+        if(model(X[i, :], params) > eval_inf)
             append!(Id0, i)
         else
             append!(Id1, i)
@@ -140,26 +171,18 @@ function works(model, params, X)
     return Id0, Id1
 end
 
-function showGrid(model, params, X)
-    Idex0, Idex1 = works(model, params, X)
+# Canvas Tools
+
+# shows the grid X with the separation of good and bad points for the model
+function showGrid(model, params, eval_inf, X)
+    Idex0, Idex1 = works(model, params, eval_inf, X)
     tuple_real_X0 = ListToTuple([X[i, :] for i in Idex0])
     tuple_real_X1 = ListToTuple([X[i, :] for i in Idex1])
     scatter(tuple_real_X0, xlims = (-1, 1), ylims = (-1, 1), color = "blue", label = "success")
     scatter!(tuple_real_X1, xlims = (-1, 1), ylims = (-1, 1), color = "red", label = "fail")
 end
 
-function interpolation_lin(model, params, X, p)
-    N = size(X, 1)
-    beta = [model(X[i, :], params) for i=1:N]
-    return M(X, p)\beta
-end
-
-function interpolation_exp(X, p, model, eps)
-    N = size(X, 1)
-    beta = [invexp(model(X[i, :]), eps) for i=1:N]
-    return M(X, p)\beta
-end
-
+# displays the metric linear interpolation solution based on the pre-computed solution alpha and the grid X
 function display_sol_lin(a, b, alpha, X, p)
     N = length(alpha)
     x = LinRange(a, b, 100)
@@ -174,6 +197,9 @@ function display_sol_lin(a, b, alpha, X, p)
     heatmap(y, x, col)
 end
 
+# Validation Tools
+
+# computes the type I and type II errors based on grid and the sensibility eval_inf
 function success_rate(model, params, eval_inf, grid, val)
     n_test = size(grid, 1)
     count_type_I = 0
@@ -200,10 +226,12 @@ function success_rate(model, params, eval_inf, grid, val)
     end
 end
 
+#=
+# Ball models Test
 begin
     # Parameters
     n_test = 70
-    n0 = 6 # warning : no odd integer
+    n0 = 10 # warning : no odd integer
     eps = 0.1
     interpolation_inf = 0.86
     model_params = [[0.2, 0.0], 0.4, 0.8]
@@ -227,6 +255,38 @@ begin
     #showGrid(ball_model, model_params, test_X)
     #showGrid(real_X)
     #showGrid(ball_model, model_params, adapt_X)
+
+    #display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
+end
+=#
+
+# Cube models Test
+begin
+    # Parameters
+    n_test = 70
+    n0 = 10 # warning : no odd integer
+    interpolation_inf = 0.2
+    model_params = [[-1.0, 1.0], [-0.15, -0.05]]
+
+    # Grid Initialization
+    test_X = regular_grid(-1.0, 1.0, n_test, 2)
+    real_X = regular_grid(-1.0, 1.0, n0, 2)
+    adapt_X = adaptative_grid_lin(cube_model, model_params, 0.1, -1.0, 1.0, 3, n0, 2)
+
+    # Test of Validity with a toymodel of linear metric interpolation
+    N_test = n_test^2
+    N_train = n0*2 + 2^2
+    alpha = interpolation_lin(cube_model, model_params, adapt_X, 1)
+    val = [sum([alpha[k]*d(test_X[i, :], adapt_X[k, :])^1 for k=1:N_train]) for i=1:(n_test^2)]
+
+    err = success_rate(cube_model, model_params, interpolation_inf, test_X, val)
+    print("Taux erreur type I : ", err[1], "\n")
+    print("Taux erreur type II : ", err[2])
+
+    # Show the results
+    #showGrid(cube_model, model_params, interpolation_inf, test_X)
+    #showGrid(real_X)
+    #showGrid(cube_model, model_params, interpolation_inf, adapt_X)
 
     display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
 end
