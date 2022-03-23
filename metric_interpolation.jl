@@ -71,8 +71,8 @@ function quad_fill(dim, m, M)
     end
 end
 
-# returns an adaptative grid generated with cutlines and quadfills
-function adaptative_grid_lin(model, params, ad_inf, a, b, nbpoints, n0, dim)
+# returns an adaptive grid generated with cutlines and quadfills
+function adaptive_grid_lin(model, params, ad_inf, a, b, nbpoints, n0, dim)
     middle = fill((a + b)/2, dim - 1)
     X = zeros((n0*dim + 2^dim, dim))
     m = fill(a, dim)
@@ -208,11 +208,11 @@ function success_rate(model, params, eval_inf, grid, val)
     for i=1:n_test
         if(model(grid[i, :], params) > eval_inf)
             count_reals += 1
-            if(val[i] <= eval_inf) # Ca allait marcher mais on pense que ça ne marche pas
+            if(val[i] <= eval_inf) # It would success but we think it is a failure
                 count_type_I += 1
             end
         else
-            if(val[i] > eval_inf) # Ca allait ne pas marcher mais on pense que ça marche
+            if(val[i] > eval_inf) # It would fail but we think it is a success
                 count_type_II += 1
             end
         end
@@ -224,6 +224,15 @@ function success_rate(model, params, eval_inf, grid, val)
     else
         return count_type_I/count_reals, count_type_II/(n_test - count_reals)
     end
+end
+
+# retrieve the model with params = [alpha, grid, inter_inf] (where alpha is the interpolation restult, grid is the grid used to interpolate, and inter_inf is the sensibility)
+function retrieve_model(x, params)
+    alpha = params[1]
+    grid = params[2]
+    interpolation_inf = params[3]
+    N_train = size(grid, 1)
+    return sum([alpha[k]*d(x, grid[k, :])^1 for k=1:N_train]) > interpolation_inf
 end
 
 #=
@@ -239,7 +248,7 @@ begin
     # Grid Initialization
     test_X = regular_grid(-1.0, 1.0, n_test, 2)
     real_X = regular_grid(-1.0, 1.0, n0, 2)
-    adapt_X = adaptative_grid_lin(ball_model, model_params, 0.1, -1.0, 1.0, 3, n0, 2)
+    adapt_X = adaptive_grid_lin(ball_model, model_params, 0.1, -1.0, 1.0, 3, n0, 2)
 
     # Test of Validity with a toymodel of linear metric interpolation
     N_test = n_test^2
@@ -265,13 +274,13 @@ begin
     # Parameters
     n_test = 70
     n0 = 10 # warning : no odd integer
-    interpolation_inf = 0.2
-    model_params = [[-1.0, 1.0], [-0.15, -0.05]]
+    interpolation_inf = 0.9749
+    model_params = [[-0.4, 1.0], [-1.0, 0.7]]
 
     # Grid Initialization
     test_X = regular_grid(-1.0, 1.0, n_test, 2)
     real_X = regular_grid(-1.0, 1.0, n0, 2)
-    adapt_X = adaptative_grid_lin(cube_model, model_params, 0.1, -1.0, 1.0, 3, n0, 2)
+    adapt_X = adaptive_grid_lin(cube_model, model_params, 0.1, -1.0, 1.0, 3, n0, 2)
 
     # Test of Validity with a toymodel of linear metric interpolation
     N_test = n_test^2
@@ -284,9 +293,10 @@ begin
     print("Taux erreur type II : ", err[2])
 
     # Show the results
+    showGrid(retrieve_model, [alpha, adapt_X, interpolation_inf], interpolation_inf, test_X)
     #showGrid(cube_model, model_params, interpolation_inf, test_X)
     #showGrid(real_X)
     #showGrid(cube_model, model_params, interpolation_inf, adapt_X)
 
-    display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
+    #display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
 end
