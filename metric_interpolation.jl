@@ -4,12 +4,13 @@ using LinearAlgebra
 
 ### Tools
 # Grid tools
-# returns a regular grid in dimension dim duplicating the line c in every dimension
-function line_fill(dim, c)
-    N = length(c)
+# returns a regular grid in dimension dim with boundaries [a[1], b[1]]x...x[a[dim], b[dim]]
+function regular_grid(a, b, N)
+    dim = length(a)
     Y = zeros((N^dim, dim))
+    c = LinRange(a[dim] + (b[dim]-a[dim])/(2N), b[dim] - (b[dim]-a[dim])/(2N), N)
     if(dim >= 2)
-        Z = line_fill(dim - 1, c)
+        Z = regular_grid(a[1:(dim - 1)], b[1:(dim-1)], N)
         for i=1:N^(dim - 1)
             for j=1:N
                 Y[(i-1)*N+j, :] = [Z[i], c[j]]
@@ -24,26 +25,47 @@ function line_fill(dim, c)
     end
 end
 
-# returns a regular grid in dimension dim
-function regular_grid(a, b, N, dim)
-    c = LinRange(a+(b-a)/(2N), b-(b-a)/(2N), N)
-    return line_fill(dim, c)
+# Van Der Corput function
+function Van_Der_Corput_g(b, n)
+    m = n
+    dk = zeros(Int64, 0)
+    while(m >= 2)
+        r = m%b
+        append!(dk, r)
+        m = floor((m-r)/b)
+    end
+    append!(dk, 1)
+    L = length(dk)
+    return sum([dk[i]*float(b)^(-i) for i=1:L])
+end
+
+# Hammersley sequence diluted in [a[1], c[1]]x[a[2], c[2]]x...x[a[d], c[d]]
+function Hammersley_grid(a, c, b, N)
+    s = length(b) # = d - 1
+    x = zeros((N, s+1))
+    for i=1:N
+        for j=1:s
+            x[i, j] = (c[j] - a[j])*Van_Der_Corput_g(b[j], i) + a[j]
+        end
+        x[i, s+1] = (c[s+1] - a[s+1])*i/N + a[s+1]
+    end
+    return x
 end
 
 # returns the cut (deduced from the model with condition model > ad_inf) of the line going through the dimension i
 function cutline(model, params, ad_inf, line, a, b, n0, i)
     dim = length(line) + 1
     Y = zeros((n0, dim))
-    c = LinRange(a+(b-a)/(2n0), b-(b-a)/(2n0), n0)
-    count, countmax, m, M = 0, 0, a, b
+    c = LinRange(a[i]+(b[i]-a[i])/(2n0), b[i]-(b[i]-a[i])/(2n0), n0)
+    count, countmax, m, M = 0, 0, a[i], b[i]
     for j = 1:n0
         Y[j, 1:(i-1)] = line[1:(i-1)]
-        Y[j, i] = c[j]
+        Y[j, i] = c[j] # we change only the dimension i
         Y[j, (i+1):dim] = line[i:(dim-1)]
         if(model(Y[j, :], params) <= ad_inf) # majority election
             if(count > countmax)
-                M = c[j] - (b-a)/(2n0)
-                m = c[j - count] - (b-a)/(2n0)
+                M = c[j] - (b[i]-a[i])/(2n0)
+                m = c[j - count] - (b[i]-a[i])/(2n0)
                 countmax = count
             end
             count = 0
@@ -51,6 +73,13 @@ function cutline(model, params, ad_inf, line, a, b, n0, i)
             count += 1
         end
     end
+
+    if(count > countmax)
+        M = c[n0] + (b[i]-a[i])/(2n0)
+        m = c[n0 - count] + (b[i]-a[i])/(2n0)
+        countmax = count
+    end
+
     return Y, m, M
 end
 
@@ -71,15 +100,16 @@ function quad_fill(dim, m, M)
     end
 end
 
-# returns an adaptive grid generated with cutlines and quadfills
-function adaptive_grid_lin(model, params, ad_inf, a, b, nbpoints, n0, dim)
-    middle = fill((a + b)/2, dim - 1)
+# returns an adaptive grid generated with cutlines and quadfills with boundaries [a[1], b[1]]x...x[a[dim], b[dim]]
+function adaptive_grid_lin(model, params, ad_inf, a, b, n0, dim)
+    middle = ((a + b)/2)[1:(dim - 1)]
     X = zeros((n0*dim + 2^dim, dim))
-    m = fill(a, dim)
-    M = fill(b, dim)
+    m = copy(a)
+    M = copy(b)
     for d=1:dim
         X[(n0*(d-1)+1):(n0*d), :], m[d], M[d] = cutline(model, params, ad_inf, middle, a, b, n0, d)
         if(d <= dim - 1)
+            print(m, "\n", M, "\n")
             middle[d] = (m[d] + M[d])/2
         end
     end
@@ -112,8 +142,8 @@ function invexp(x, eps)
     return log(eps)*(0 <= x <= eps) + log(x)*(x > eps)
 end
 
-# metric distance
-function d(x, y)
+# euclidian metric distance
+function dist(x, y)
     return norm(x - y)
 end
 
@@ -123,7 +153,7 @@ function M(X, p)
     Mat = zeros(n, n)
     for i=1:n
         for j=1:n
-            Mat[i,j] = d(X[i, :], X[j, :])^p
+            Mat[i,j] = dist(X[i, :], X[j, :])^p
         end
     end
     return Mat
@@ -136,11 +166,13 @@ function interpolation_lin(model, params, X, p)
     return M(X, p)\beta
 end
 
-# metric pseudo-gaussian interpolation (almost the same)
-function interpolation_exp(X, p, model, eps)
-    N = size(X, 1)
-    beta = [invexp(model(X[i, :]), eps) for i=1:N]
-    return M(X, p)\beta
+# returns f(x) = sum_i alpha_i d(x, X_i)^p with params = [X, p, alpha]
+function f_metric_lin(x, params)
+    X = params[1]
+    p = params[2]
+    alpha = params[3]
+    Ntrain = size(X, 1)
+    return sum([alpha[i]*dist(x, X[i, :])^p for i=1:Ntrain])
 end
 
 # Converting Tools
@@ -190,8 +222,8 @@ function display_sol_lin(a, b, alpha, X, p)
     col = zeros(100, 100)
     for i=1:100
         for j=1:100
-            val = sum([alpha[k]*d([x[i], y[j]], X[k, :])^p for k=1:N])
-            col[j,i] = val + (1 - val)*(val > 1)
+            val = sum([alpha[k]*dist([x[i], y[j]], X[k, :])^p for k=1:N])
+            col[j,i] = val + (1 - val)*(val > 1) - val*(val < 0)
         end
     end
     heatmap(y, x, col)
@@ -232,71 +264,51 @@ function retrieve_model(x, params)
     grid = params[2]
     interpolation_inf = params[3]
     N_train = size(grid, 1)
-    return sum([alpha[k]*d(x, grid[k, :])^1 for k=1:N_train]) > interpolation_inf
+    return sum([alpha[k]*dist(x, grid[k, :])^1 for k=1:N_train]) > interpolation_inf
 end
-
-#=
-# Ball models Test
-begin
-    # Parameters
-    n_test = 70
-    n0 = 10 # warning : no odd integer
-    eps = 0.1
-    interpolation_inf = 0.86
-    model_params = [[0.2, 0.0], 0.4, 0.8]
-
-    # Grid Initialization
-    test_X = regular_grid(-1.0, 1.0, n_test, 2)
-    real_X = regular_grid(-1.0, 1.0, n0, 2)
-    adapt_X = adaptive_grid_lin(ball_model, model_params, 0.1, -1.0, 1.0, 3, n0, 2)
-
-    # Test of Validity with a toymodel of linear metric interpolation
-    N_test = n_test^2
-    N_train = n0*2 + 2^2
-    alpha = interpolation_lin(ball_model, model_params, adapt_X, 1)
-    val = [sum([alpha[k]*d(test_X[i, :], adapt_X[k, :])^1 for k=1:N_train]) for i=1:(n_test^2)]
-
-    err = success_rate(ball_model, model_params, interpolation_inf, test_X, val)
-    print("Taux erreur type I : ", err[1], "\n")
-    print("Taux erreur type II : ", err[2])
-
-    # Show the results
-    #showGrid(ball_model, model_params, test_X)
-    #showGrid(real_X)
-    #showGrid(ball_model, model_params, adapt_X)
-
-    #display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
-end
-=#
 
 # Cube models Test
 begin
     # Parameters
+    dim = 2
     n_test = 70
     n0 = 10 # warning : no odd integer
-    interpolation_inf = 0.9749
-    model_params = [[-0.4, 1.0], [-1.0, 0.7]]
+    interpolation_inf = 0.88
+    model_params = [[-0.4, 1.0], [-1.0, 0.8]]
+    a = fill(-1.0, dim) # minimum boundaries
+    b = fill(1.0, dim) # maximum boundaries
 
     # Grid Initialization
-    test_X = regular_grid(-1.0, 1.0, n_test, 2)
-    real_X = regular_grid(-1.0, 1.0, n0, 2)
-    adapt_X = adaptive_grid_lin(cube_model, model_params, 0.1, -1.0, 1.0, 3, n0, 2)
+    test_X = regular_grid(a, b, n_test)
+    adapt_X = adaptive_grid_lin(cube_model, model_params, 0.1, a, b, n0, 2)
+    quad_X = quad_fill(dim, a, b)
+    Ham_X = Hammersley_grid(a, b, [2], 300)
 
     # Test of Validity with a toymodel of linear metric interpolation
     N_test = n_test^2
-    N_train = n0*2 + 2^2
     alpha = interpolation_lin(cube_model, model_params, adapt_X, 1)
-    val = [sum([alpha[k]*d(test_X[i, :], adapt_X[k, :])^1 for k=1:N_train]) for i=1:(n_test^2)]
+    val = [f_metric_lin(test_X[i, :], [adapt_X, 1, alpha]) for i=1:N_test]
 
     err = success_rate(cube_model, model_params, interpolation_inf, test_X, val)
     print("Taux erreur type I : ", err[1], "\n")
     print("Taux erreur type II : ", err[2])
 
+
+    # Hammersley test
+    alpha = interpolation_lin(cube_model, model_params, Ham_X, 1)
+    val = [f_metric_lin(test_X[i, :], [Ham_X, 1, alpha]) for i=1:N_test]
+    err = success_rate(cube_model, model_params, interpolation_inf, test_X, val)
+    print("\n Taux erreur type I : ", err[1], "\n")
+    print("Taux erreur type II : ", err[2])
+
     # Show the results
-    showGrid(retrieve_model, [alpha, adapt_X, interpolation_inf], interpolation_inf, test_X)
+    #showGrid(retrieve_model, [alpha, Ham_X, interpolation_inf], interpolation_inf, test_X)
     #showGrid(cube_model, model_params, interpolation_inf, test_X)
-    #showGrid(real_X)
+    #showGrid(cube_model, model_params, interpolation_inf, quad_X)
     #showGrid(cube_model, model_params, interpolation_inf, adapt_X)
 
     #display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
+    #display_sol_lin(-1.0, 1.0, alpha, Ham_X, 1)
+
+    showGrid(cube_model, model_params, interpolation_inf, Ham_X)
 end
