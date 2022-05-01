@@ -3,6 +3,18 @@ using Plots
 using LinearAlgebra
 
 ### Tools
+# Logic Tools
+# tests if e (vector) is eps-close to one element (vector) in L
+function oneclose(e, L, eps)
+    n = length(L)
+    for i=1:n
+        if(norm(e - L[i, :]) > eps)
+            return false
+        end
+    end
+    return true
+end
+
 # Grid tools
 # returns a regular grid in dimension dim with boundaries [a[1], b[1]]x...x[a[dim], b[dim]]
 function regular_grid(a, b, N)
@@ -50,6 +62,19 @@ function Hammersley_grid(a, c, b, N)
         x[i, s+1] = (c[s+1] - a[s+1])*i/N + a[s+1]
     end
     return x
+end
+
+function LineArange(a, b, pos, n0, i)
+    dim = length(a)
+    Y = zeros((n0, dim))
+    c = LinRange(a[i]+(b[i]-a[i])/(2n0), b[i]-(b[i]-a[i])/(2n0), n0)
+    for j = 1:n0
+        Y[j, 1:(i-1)] = pos[1:(i-1)]
+        Y[j, i] = c[j] # we change only the dimension i
+        Y[j, (i+1):dim] = pos[i:(dim-1)]
+    end
+
+    return Y
 end
 
 # returns the cut (deduced from the model with condition model > ad_inf) of the line going through the dimension i
@@ -109,12 +134,65 @@ function adaptive_grid_lin(model, params, ad_inf, a, b, n0, dim)
     for d=1:dim
         X[(n0*(d-1)+1):(n0*d), :], m[d], M[d] = cutline(model, params, ad_inf, middle, a, b, n0, d)
         if(d <= dim - 1)
-            print(m, "\n", M, "\n")
             middle[d] = (m[d] + M[d])/2
         end
     end
     X[(dim*n0+1):(dim*n0+2^dim), :] = quad_fill(dim, m, M)
     return X
+end
+
+function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, dim, Nmax)
+    # Initialization
+    X_base = zeros((2^dim+1, dim))
+    X_ada = zeros((Nmax, dim))
+    X_base[1, :] = (a + b)/2.0
+    X_base[2:2^dim+1, :] = quad_fill(dim, a, b)
+
+    # Processing adaptive grid...
+    X_ada[1:2^dim+1, :] = X_base
+    j = 2^dim+2
+    
+    if(j > Nmax)
+        return X_ada
+    end
+
+    for i=1:(2^dim+1)
+        if(model(X_base[i, :], params) > ad_inf)
+            for d=1:dim
+                n0 = floor(Int, (b[d] - X_base[i, d])/nominal_dist) + 1
+                candidates_X = LineArange(X_base[i, :], b, X_base[i, :], n0, d)
+                for i=1:n0
+                    if(oneclose(candidates_X[i, :], X_ada, 1e-7) == false) # if we don't already have that point
+                        X_ada[j, :] = candidates_X[i, :]
+                        j += 1
+                        if(j > Nmax)
+                            return X_ada
+                        end
+                    end
+                    if(model(candidates_X[i, :], params) <= ad_inf)
+                        break
+                    end
+                end
+
+                n0 = floor(Int, (X_base[i, d] - a[d])/nominal_dist) + 1
+                candidates_X = reverse(LineArange(a, X_base[i, :], X_base[i, :], n0, d))
+                for i=1:n0
+                    if(oneclose(candidates_X[i, :], X_ada, 1e-7) == false) # if we don't already have that point
+                        X_ada[j, :] = candidates_X[i, :]
+                        j += 1
+                        if(j > Nmax)
+                            return X_ada
+                        end
+                    end
+                    if(model(candidates_X[i, :], params) <= ad_inf)
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    return X_ada
 end
 
 # Toymodels
@@ -133,6 +211,12 @@ function cube_model(x, params)
         end
     end
     return 1.0 # True
+end
+
+# params = [params_cube_1, params_cube_2, ...], it is preferable to have no intersection between them, but it could still works with non empty intersections
+function assembly_cube_model(x, params)
+    n = size(params, 1)
+    return sum([cube_model(x, params[i]) for i=1:n])
 end
 
 # Calculus tools
@@ -224,6 +308,7 @@ function display_sol_lin(a, b, alpha, X, p)
         for j=1:100
             val = sum([alpha[k]*dist([x[i], y[j]], X[k, :])^p for k=1:N])
             col[j,i] = val + (1 - val)*(val > 1) - val*(val < 0)
+            #col[j,i] = 1/(1+exp(-val))
         end
     end
     heatmap(y, x, col)
@@ -274,41 +359,43 @@ begin
     n_test = 70
     n0 = 10 # warning : no odd integer
     interpolation_inf = 0.88
-    model_params = [[-0.4, 1.0], [-1.0, 0.8]]
+    model_params = [[[0.0, 1.0], [0.0, 0.8]], [[-1.0, -0.4], [-0.9, -0.2]]]
     a = fill(-1.0, dim) # minimum boundaries
     b = fill(1.0, dim) # maximum boundaries
 
     # Grid Initialization
     test_X = regular_grid(a, b, n_test)
-    adapt_X = adaptive_grid_lin(cube_model, model_params, 0.1, a, b, n0, 2)
+    adapt_X = adaptive_grid_lin(assembly_cube_model, model_params, 0.1, a, b, n0, 2)
+    adapt_X_cube = adaptive_grid_cube(assembly_cube_model, model_params, 0.1, a, b, 3e-1, 2, 80)
     quad_X = quad_fill(dim, a, b)
-    Ham_X = Hammersley_grid(a, b, [2], 300)
+    Ham_X = Hammersley_grid(a, b, [2], 24)
 
     # Test of Validity with a toymodel of linear metric interpolation
-    N_test = n_test^2
-    alpha = interpolation_lin(cube_model, model_params, adapt_X, 1)
+    N_test = n_test^dim
+    alpha = interpolation_lin(assembly_cube_model, model_params, adapt_X, 1)
     val = [f_metric_lin(test_X[i, :], [adapt_X, 1, alpha]) for i=1:N_test]
 
-    err = success_rate(cube_model, model_params, interpolation_inf, test_X, val)
+    err = success_rate(assembly_cube_model, model_params, interpolation_inf, test_X, val)
     print("Taux erreur type I : ", err[1], "\n")
     print("Taux erreur type II : ", err[2])
 
 
     # Hammersley test
-    alpha = interpolation_lin(cube_model, model_params, Ham_X, 1)
+    alpha = interpolation_lin(assembly_cube_model, model_params, Ham_X, 1)
     val = [f_metric_lin(test_X[i, :], [Ham_X, 1, alpha]) for i=1:N_test]
-    err = success_rate(cube_model, model_params, interpolation_inf, test_X, val)
+    err = success_rate(assembly_cube_model, model_params, interpolation_inf, test_X, val)
     print("\n Taux erreur type I : ", err[1], "\n")
     print("Taux erreur type II : ", err[2])
 
     # Show the results
     #showGrid(retrieve_model, [alpha, Ham_X, interpolation_inf], interpolation_inf, test_X)
-    #showGrid(cube_model, model_params, interpolation_inf, test_X)
+    #showGrid(assembly_cube_model, model_params, interpolation_inf, test_X)
     #showGrid(cube_model, model_params, interpolation_inf, quad_X)
     #showGrid(cube_model, model_params, interpolation_inf, adapt_X)
 
     #display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
     #display_sol_lin(-1.0, 1.0, alpha, Ham_X, 1)
 
-    showGrid(cube_model, model_params, interpolation_inf, Ham_X)
+    #showGrid(cube_model, model_params, interpolation_inf, Ham_X)
+    #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X_cube)
 end
