@@ -1,11 +1,23 @@
 using Pkg
 using Plots
 using LinearAlgebra
+using Convex
+using SCS
 
-### Tools
+######## Tools ########
 # Logic Tools
-# tests if e (vector) is eps-close to one element (vector) in L
+
 function oneclose(e, L, eps)
+    #=
+    Parameters : 
+    _ L : list of vectors (in matrix shape) 
+    _ e : element possibly near to L
+    _ eps : maximum accuracy tolerated of e with one element in L
+
+    Returns : boolean
+    if e is eps-close to L, returns true
+    else returns false
+    =#
     n = size(L, 1)
     if(n == 0)
         return false
@@ -18,14 +30,77 @@ function oneclose(e, L, eps)
     return true
 end
 
-# returns true if the hypercube H1 is (strictly) included in one element H2 in list_H2, H1 & H2 given with their parameters [[inf_dim1, inf_dim2, ...], [sup_dim1, ...]]
+function updateBase1(i, limits)
+    #=
+    Parameters :
+    _ i : integer vector that symbolize the number to update
+    _ limits : list of integer 2D-vectors to symbolize the box of the base
+
+    Returns :
+    The number i+1 in the base notation defined by limits
+    =#
+    d = length(i)
+    new_i = i
+    for k=1:d
+        if(new_i[k] <= limits[k][2] - 1)
+            new_i[k] += 1
+            break
+        elseif(k <= d - 1)
+            new_i[k] = limits[k][1]
+        else
+            return -1
+        end
+    end
+    return new_i
+end
+
+function update_changes(list, elementToAdd, Compare_list, compared_element)
+    #=
+    Parameters :
+    _ list : list of elements sorted with the order defined by Compare_list
+    _ elemntsToAdd : the element to update list
+    _ Compare_list : list of real numbers defining the order of list
+    _ compared_element : real number defining the order
+
+    Returns :
+    list updated with elemntToAdd (added to the right place defined by its order)
+    =#
+    K = length(Compare_list)
+    new_list = copy(list)
+    new_compare_list = copy(Compare_list)
+    for k=1:(K-1)
+        if(Compare_list[k] < compared_element && compared_element <= Compare_list[k+1])
+            Listcat = cat(list[2:k, :], reshape(elementToAdd, 1, dim), dims=1) # add the element
+            new_list = cat(Listcat, list[(k+1):K, :], dims=1)
+            Comparecat = cat(Compare_list[2:k], [compared_element], dims=1)
+            new_compare_list = cat(Comparecat, Compare_list[(k+1):K], dims=1)
+            break
+        end
+    end
+    if(Compare_list[K] < compared_element)
+        new_list[1:(K-1), :] = copy(list[2:K, :])
+        new_compare_list[1:(K-1)] = copy(Compare_list[2:K])
+        new_list[K, :] = elementToAdd
+        new_compare_list[K] = compared_element
+    end
+    return new_list, new_compare_list
+end
+
 function isIncludedInOneHC(H1, list_H2)
+    #=
+    Parameters :
+    _ H1 : Hypercube to check (same format as for the cube_model)
+    _ list_H2 : list to check (same format as the assembly_cube_model)
+
+    Returns :
+    True if H1 is (strictly) included in an element of list_H2, else false
+    =#
     d = size(H1, 2)
     n = size(list_H2, 1)
     for i=1:n
         count = 0
         for j=1:d
-            if(H1[1, j] <= (list_H2[i])[1, j] || (list_H2[i])[2, j] <= H1[2, j]) # if we can have x in H1 and not in the interior of list_H2[i]
+            if(H1[j][1] <= (list_H2[i])[j][1] || (list_H2[i])[j][2] <= H1[j][2]) # if we can have x in H1 and not in the interior of list_H2[i]
                 break
             end
             count += 1
@@ -49,7 +124,8 @@ function decompo_base(n, d; base=10)
     return res
 end
 
-# Grid tools
+# Grid Tools
+
 # returns a regular grid in dimension dim with boundaries [a[1], b[1]]x...x[a[dim], b[dim]]
 function regular_grid(a, b, N)
     dim = length(a)
@@ -86,7 +162,7 @@ function center_line(a, b, V)
     k = V[1]
     j = V[2]
     d = length(a)
-    N = d*(2^k - 1)^d*(2^(k + j - 1) - 1)
+    N = d*2^((k-1)*d)*2^(j - 1)
     Line = zeros(N, d)
     i = 1
     for t=0:(2^(d*(k-1)) - 1)
@@ -125,6 +201,7 @@ function center_based_grid(a, b, N, s)
         Line, L = center_line(a, b, current_V)
         #print("\n current line : ", Line)
         for i=1:L
+            #print("\n line : ", reshape(Line[i, :], 1, dim))
             X = cat(X, reshape(Line[i, :], 1, dim), dims=1) # add the element
             j += 1
             if(j > N)
@@ -200,7 +277,7 @@ function cutline(model, params, ad_inf, line, a, b, n0, i)
 
     if(count > countmax)
         M = c[n0] + (b[i]-a[i])/(2n0)
-        m = c[n0 - count] + (b[i]-a[i])/(2n0)
+        m = c[n0 - count + 1] - (b[i]-a[i])/(2n0)
         countmax = count
     end
 
@@ -237,7 +314,7 @@ function adaptive_grid_lin(model, params, ad_inf, a, b, n0, dim)
         end
     end
     X[(dim*n0+1):(dim*n0+2^dim), :] = quad_fill(dim, m, M)
-    return X
+    return X, m, M
 end
 
 # Generates the adaptive grid assuming the model is a group of hypercubes.
@@ -256,13 +333,20 @@ end
 
     - K : maximal number of hypercubes to return 
 =#
-function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K)
+function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K; returns_full = false)
     # Initialization
     dim = length(a)
     m = ones((K, dim))
     M = ones((K, dim))
+    for k=1:K
+        M[k, :] = b
+        m[k, :] = b
+    end
+
     Kareas = fill(-7.0, K)
     X_ada = zeros((0, dim))
+    full_var = true
+    true_K = 0
 
     # Base of lodes
     X_base = zeros((2^dim+1, dim))
@@ -286,7 +370,11 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K)
                 X_ada = cat(X_ada, reshape(X_base[i, :], 1, dim), dims=1) # add the element
                 j += 1
                 if(j > Nmax)
-                    return X_ada
+                    if(returns_full)
+                        return X_ada, m, M, Kareas, full_var
+                    else
+                        return X_ada, m, M
+                    end
                 end
             end
 
@@ -303,10 +391,15 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K)
                             X_ada = cat(X_ada, reshape(candidates_X[k, :], 1, dim), dims=1) # add the element
                             j += 1
                             if(j > Nmax)
-                                return X_ada
+                                if(returns_full)
+                                    return X_ada, m, M, Kareas, full_var
+                                else
+                                    return X_ada, m, M
+                                end
                             end
                         end
                         if(model(candidates_X[k, :], params) <= ad_inf)
+                            full_var = false
                             break
                         end
                         k += 1
@@ -314,7 +407,6 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K)
                     if(k >= 2)
                         maxi[d] = candidates_X[k-1, d]
                     end
-
                     n0 = floor(Int, (X_base[i, d] - a[d])/nominal_dist) + 1
                     candidates_X = reverse(LineArange(a, X_base[i, :], X_base[i, :], n0, d), dims=1)
                     k = 1
@@ -323,10 +415,15 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K)
                             X_ada = cat(X_ada, reshape(candidates_X[k, :], 1, dim), dims=1) # add the element
                             j += 1
                             if(j > Nmax)
-                                return X_ada
+                                if(returns_full)
+                                    return X_ada, m, M, Kareas, full_var
+                                else
+                                    return X_ada, m, M
+                                end
                             end
                         end
                         if(model(candidates_X[k, :], params) <= ad_inf)
+                            full_var = false
                             break
                         end
                         k += 1
@@ -337,31 +434,38 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K)
                 end
                 # Change the K hypercubes if necessary
                 area = sum([log(maxi[l] - mini[l] + (maxi[l] == mini[l])*(1e-7)) for l=1:dim])
-                print(area, " : ", Kareas, "\n")
-                for k=1:(K-1)
-                    if(Kareas[k] < area && area < Kareas[k+1])
-                        Mcat = cat(M[2:k, :], reshape(maxi, 1, dim), dims=1) # add the element
-                        M = cat(Mcat, M[(k+1):K, :], dims=1)
-                        mcat = cat(m[2:k, :], reshape(mini, 1, dim), dims=1)
-                        m = cat(mcat, m[(k+1):K, :], dims=1)
-                        Kareascat = cat(Kareas[2:k], [area], dims=1)
-                        Kareas = cat(Kareascat, Kareas[(k+1):K], dims=1)
-                        break
-                    end
-                end
-                if(Kareas[K] < area)
-                    M[1:(K-1), :] = copy(M[2:K, :])
-                    m[1:(K-1), :] = copy(m[2:K, :])
-                    Kareas[1:(K-1)] = copy(Kareas[2:K])
-                    M[K, :] = maxi
-                    m[K, :] = mini
-                    Kareas[K] = area
-                end
+                M, newKareas = update_changes(M, maxi, Kareas, area)
+                m, Kareas = update_changes(m, mini, Kareas, area)
+                true_K = min(K, true_K + 1)
+            else
+                full_var = false
             end
         end
     end
-
-    return X_ada, m, M
+    if(Nmax - j >= true_K && true_K >= 1)
+        n = floor(Int, (Nmax - j)/true_K)
+        new_M = copy(M)
+        new_m = copy(m)
+        new_Kareas = fill(-7.0, dim)
+        for k=(K-true_K+1):K
+            grid, candidate_m, candidate_M, candidate_Kareas, candidate_full_var = adaptive_grid_cube(model, params, ad_inf, m[k, :], M[k, :], nominal_dist, n, K, returns_full=true)
+            X_ada = cat(X_ada, grid, dims=1)
+            if(candidate_full_var == false)
+                for i=1:K
+                    new_m, _ = update_changes(new_m, candidate_m[i, :], new_Kareas, candidate_Kareas[i])
+                    new_M, newKareas = update_changes(new_M, candidate_M[i, :], new_Kareas, candidate_Kareas[i])
+                end
+            else
+                new_m, _ = update_changes(new_m, m[k, :], new_Kareas, Kareas[k])
+                new_M, newKareas = update_changes(new_M, M[k, :], new_Kareas, Kareas[k])
+            end
+        end
+    end
+    if(returns_full)
+        return X_ada, m, M, Kareas, full_var
+    else
+        return X_ada, m, M
+    end
 end
 
 # Toymodels
@@ -432,6 +536,44 @@ function f_metric_lin(x, params)
     alpha = params[3]
     Ntrain = size(X, 1)
     return sum([alpha[i]*dist(x, X[i, :])^p for i=1:Ntrain])
+end
+
+"""
+    LassoEN(Y,X,γ,λ)
+
+Do Lasso (set γ>0,λ=0), ridge (set γ=0,λ>0) or elastic net regression (set γ>0,λ>0).
+
+
+# Input
+- `Y::Vector`:     T-vector with the response (dependent) variable
+- `X::VecOrMat`:   TxK matrix of covariates (regressors)
+- `γ::Number`:     penalty on sum(abs.(b))
+- `λ::Number`:     penalty on sum(b.^2)
+
+"""
+function LassoEN(Y, X, γ, λ = 0)
+    (T, K) = (size(X, 1), size(X, 2))
+
+    b_ls = X \ Y                    #LS estimate of weights, no restrictions
+
+    Q = X'X / T
+    c = X'Y / T                      #c'b = Y'X*b
+
+    b = Variable(K)              #define variables to optimize over
+    L1 = quadform(b, Q)            #b'Q*b
+    L2 = dot(c, b)                 #c'b
+    L3 = norm(b, 1)                #sum(|b|)
+    L4 = sumsquares(b)            #sum(b^2)
+
+    if λ > 0
+        Sol = minimize(L1 - 2 * L2 + γ * L3 + λ * L4)      #u'u/T + γ*sum(|b|) + λ*sum(b^2), where u = Y-Xb
+    else
+        Sol = minimize(L1 - 2 * L2 + γ * L3)               #u'u/T + γ*sum(|b|) where u = Y-Xb
+    end
+    solve!(Sol, SCS.Optimizer; silent_solver = true)
+    Sol.status == Convex.MOI.OPTIMAL ? b_i = vec(evaluate(b)) : b_i = NaN
+
+    return b_i, b_ls
 end
 
 # Converting Tools
@@ -562,7 +704,7 @@ function AbstractToConnected(model, params, eval_inf, a, b, N_test)
         end
     end
 
-    return test_X, CRindexs, areas
+    return test_X, CRindexs, CRlabel_test_X, areas
 end
 
 #= 
@@ -576,54 +718,44 @@ _ dim : dimension of the elements of the grid
 returns the K maximal hypercubes found in the connected region
 =#
 
-function ConnectedToHypercube(K, boundary_inds, N_test, dim)
+function ConnectedToHypercube(K, boundary_inds, labels, N_test, dim)
     N = length(boundary_inds)
-    digit_BI = [decompo_base(boundary_inds[i] - 1, dim, base=N_test) for i=1:N]
-    Kareas = fill(-1.0, K)
-    Kcubes_inds = zeros(Int, (K, 2)) 
-    for i=1:N
-        # To Do : recursive
-        for j=(i+1):N
-            area = exp(sum([log(abs(digit_BI[i][k] - digit_BI[j][k]) + (digit_BI[i][k] == digit_BI[j][k])*1e-8) for k=1:dim]))
-            stopvar = false
-            for l=1:N
-                count = 0
-                for k=1:dim
-                    if((digit_BI[i][k] < digit_BI[l][k] && digit_BI[l][k] < digit_BI[j][k]) || (digit_BI[i][k] > digit_BI[l][k] && digit_BI[l][k] > digit_BI[j][k]))
-                        count += 1
+    digit_BI = [reverse(decompo_base(boundary_inds[i] - 1, dim, base=N_test), dims=1) for i=1:N]
+    Kareas = fill(-1, K)
+    Kcubes_inds = zeros(Int, (K, 2))
+    C_Hull = cube_hull(mapreduce(permutedims, vcat, digit_BI))
+    print(C_Hull)
+    j = [C_Hull[k][1]+1 for k=1:dim]
+    while(j != -1)
+        i = [C_Hull[k][1] for k=1:dim]
+        while(i != -1)
+            area = 1
+            stop = false
+            l = [i[k] for k=1:dim]
+            while(l != -1)
+                n = sum([l[k]*N_test^(k-1) for k=1:dim]) + 1
+                if(labels[n] == 0)
+                    if(j == [17, 15])
+                        print("\n (i,j) = ", "(", i, " , ", j, ") , numi = ", l)
                     end
-                end
-                if(count == dim)
-                    stopvar = true
+                    stop = true
                     break
                 end
+                l = updateBase1(l, [[i[k]+1, j[k]-1] for k=1:dim])
             end
-            if(stopvar)
+            for k=1:dim
+                area = area*(j[k] - i[k])
+            end
+            if(stop == false)
+                numi = sum([i[k]*N_test^(k-1) for k=1:dim]) + 1
+                numj = sum([j[k]*N_test^(k-1) for k=1:dim]) + 1
+                Kcubes_inds, Kareas = update_changes(Kcubes_inds, [numi, numj], Kareas, area)
                 break
             end
-            for k=1:K
-                if(k == K)
-                    if(Kareas[k] < area)
-                        if(k >= 2)
-                            Kareas[1:(k-1)] = copy(Kareas[2:k])
-                            Kcubes_inds[1:(k-1), :] = copy(Kcubes_inds[2:k, :])
-                        end
-                        Kareas[k] = area
-                        Kcubes_inds[k, 1] = boundary_inds[i]
-                        Kcubes_inds[k, 2] = boundary_inds[j]
-                    end
-                elseif(Kareas[k] < area && area <= Kareas[k+1])
-                    if(k >= 2)
-                        Kareas[1:(k-1)] = copy(Kareas[2:k])
-                        Kcubes_inds[1:(k-1), :] = copy(Kcubes_inds[2:k, :])
-                    end
-                    Kareas[k] = area
-                    Kcubes_inds[k, 1] = boundary_inds[i]
-                    Kcubes_inds[k, 2] = boundary_inds[j]
-                    break
-                end
-            end
+            i = updateBase1(i, [[C_Hull[k][1], j[k] - 1] for k=1:dim])
+
         end
+        j = updateBase1(j, C_Hull)
     end
     return Kcubes_inds, Kareas
 end
@@ -718,7 +850,7 @@ begin
     dim = 2
     n_test = 70
     n0 = 10 # warning : no odd integer
-    interpolation_inf = 0.8
+    interpolation_inf = 0.95
     model_params = [[[0.0, 1.0], [0.0, 0.8]], [[-1.0, -0.4], [-0.9, -0.2]]]
     a = fill(-1.0, dim) # minimum boundaries
     b = fill(1.0, dim) # maximum boundaries
@@ -726,11 +858,11 @@ begin
 
     # Grid Initialization
     test_X = regular_grid(a, b, n_test)
-    adapt_X = adaptive_grid_lin(assembly_cube_model, model_params, 0.1, a, b, n0, 2)
-    adapt_X_cube, minim, Maxim = adaptive_grid_cube(assembly_cube_model, model_params, 0.1, a, b, 3e-1, 1000, K)
+    adapt_X, minimlin, Maximlin = adaptive_grid_lin(assembly_cube_model, model_params, 0.1, a, b, n0, 2)
+    adapt_X_cube, minim, Maxim = adaptive_grid_cube(assembly_cube_model, model_params, 0.1, a, b, 3e-1, 100, K)
     quad_X = quad_fill(dim, a, b)
-    Ham_X = Hammersley_grid(a, b, [2], 24)
-    center_X = center_based_grid(a, b, 24, 4)
+    Ham_X = Hammersley_grid(a, b, [2], 50)
+    center_X = center_based_grid(a, b, 100, 5)
 
     # Test of Validity with a toymodel of linear metric interpolation
     #=
@@ -743,21 +875,21 @@ begin
     print("Taux erreur type II : ", err[2])
 
     =#
-
-    # interpolation test
+    
+    # interpolation test on Hammersley grid
     alpha = interpolation_lin(assembly_cube_model, model_params, Ham_X, 1)
     val = [f_metric_lin(test_X[i, :], [Ham_X, 1, alpha]) for i=1:n_test^dim]
     err = success_rate(assembly_cube_model, model_params, interpolation_inf, test_X, val)
     print("\n Taux erreur type I : ", err[1], "\n")
     print("Taux erreur type II : ", err[2])
-
+    
 
     # Show the results
-    #showGrid(retrieve_model, [alpha, center_X, interpolation_inf], interpolation_inf, test_X)
+    #showGrid(retrieve_model, [alpha, Ham_X, interpolation_inf], interpolation_inf, test_X)
     showGrid(assembly_cube_model, model_params, interpolation_inf, test_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, center_X)
     #showGrid(cube_model, model_params, interpolation_inf, quad_X)
-    #showGrid(cube_model, model_params, interpolation_inf, adapt_X)
+    #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X)
 
     #display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
     #display_sol_lin(-1.0, 1.0, alpha, Ham_X, 1)
@@ -766,21 +898,24 @@ begin
     #showGrid(assembly_cube_model, model_params, interpolation_inf, Ham_X)
     #print(minim, "\n", Maxim, "\n retrieved with ", size(adapt_X_cube, 1), " points with dimension ", dim, "\n")
     #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X_cube)
-    #showGrid(assembly_cube_model, [[[minim[i,j], Maxim[i,j]] for j=1:dim] for i=1:K], interpolation_inf, test_X)
+    showGrid(assembly_cube_model, [[[minim[i,j], Maxim[i,j]] for j=1:dim] for i=1:K], interpolation_inf, test_X)
+    #print(minimlin, "\n", Maximlin, "\n retrieved with ", size(adapt_X, 1), " points with dimension ", dim, "\n")
+
     #=
     # Connex test
-    CR_grid, CR_indexs, areas = AbstractToConnected(retrieve_model, [alpha, Ham_X, interpolation_inf], interpolation_inf, a, b, 20)
+    CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_model, [alpha, Ham_X, interpolation_inf], interpolation_inf, a, b, 20)
     print("\n areas : ", areas)
-    ind = 1
-    cubes, areas = ConnectedToHypercube(4, CR_indexs[ind], 20, dim)
+    ind = 2
+    cubes, areas = ConnectedToHypercube(4, CR_indexs[ind], labels, 20, dim)
     print("\n Kareas : ", areas)
-
-    showGrid(assembly_cube_model, model_params, interpolation_inf, CR_grid[CR_indexs[ind], :])
-    print(cubes)
-    i = 1
+    i = 4
     retrieve_params = [sort([CR_grid[cubes[i, 1], 1], CR_grid[cubes[i, 2], 1]]), sort([CR_grid[cubes[i, 1], 2], CR_grid[cubes[i, 2], 2]])]
     print("\n params 1 : ", retrieve_params)
     showGrid(cube_model, retrieve_params, interpolation_inf, test_X)
+    #showGrid(assembly_cube_model, model_params, interpolation_inf, CR_grid[CR_indexs[ind], :])
+    =#
+    #=
+    print(cubes)
     maxcubeall = cube_hull(CR_grid[CR_indexs[ind], :])
     print("maxhypercubegenelarized : ", maxcubeall)
     showGrid(cube_model, maxcubeall, interpolation_inf, test_X)
