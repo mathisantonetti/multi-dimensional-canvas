@@ -525,13 +525,34 @@ function interpolation_lin(model, params, X, s)
     return distMathomo(X, s)\beta
 end
 
+# gaussian interpolation
+function interpolation_gauss(model, params, X, sig)
+    N = size(X, 1)
+    beta = [model(X[i, :], params) for i=1:N]
+    Mat = zeros((N, N))
+    for i=1:N
+        for j=1:N
+            Mat[i, j] = exp(-dist(X[i, :], X[j, :])^2/(2sig^2))
+        end
+    end
+    return Mat\beta
+end
+
 # returns f(x) = sum_i alpha_i d(x, X_i)^p with params = [X, p, alpha]
 function f_metric_lin(x, params)
-    X = params[1]
-    p = params[2]
-    alpha = params[3]
+    alpha = params[1]
+    X = params[2]
+    s = params[3]
     Ntrain = size(X, 1)
-    return sum([alpha[i]*dist(x, X[i, :])^p for i=1:Ntrain])
+    return sum([alpha[i]*dist(x, X[i, :])^s for i=1:Ntrain])
+end
+
+function f_gauss(x, params)
+    alpha = params[1]
+    X = params[2]
+    sig = params[3]
+    Ntrain = size(X, 1)
+    return sum([alpha[i]*exp(-dist(x, X[i, :])^2/(2sig^2)) for i=1:Ntrain])
 end
 
 function cube_measurement(params)
@@ -561,13 +582,11 @@ end
 function assembly_cube_measurement(params)
     s = 0
     K = length(params)
-    for i=1:K
-        s += cube_measurement(params[i])
-        for j=(i+1):K
-            s -= cube_measurement(cube_intersect(params[i], params[j]))
-        end
+    if(K == 1)
+        return cube_measurement(params[1])
+    else
+        return assembly_cube_measurement(params[1:(K-1)]) - assembly_cube_measurement([cube_intersect(params[k], params[K]) for k=1:(K-1)]) + cube_measurement(params[K])
     end
-    return s
 end
 
 """
@@ -695,29 +714,48 @@ function AbstractToConnected(model, params, eval_inf, a, b, N_test)
                 n = length(sorted_labels)
 
                 # fuse all regions in the neighbourhood
-                for k=2:(n-1)
-                    slabels_k = sorted_labels[k]
-                    slabels_kp = sorted_labels[k+1]
-                    append!(CRindexs[slabels_k], CRindexs[slabels_kp]) # add region at i+1 to i
-                    areas[slabels_k] += areas[slabels_kp] # add volume
-                    for ind in CRindexs[slabels_kp]
-                        CRlabel_test_X[ind] = slabels_k
-                    end
-                    deleteat!(CRindexs, slabels_kp) # remove region at i+1
-                    deleteat!(areas, slabels_kp)
+                det_j = 2
+                if(sorted_labels[1] >= 1)
+                    det_j = 1
                 end
-                
+                slabels_fus = sorted_labels[det_j]
+                slabels_k = slabels_fus
+                count_l = zeros(N_test^d)
+                for k=(det_j+1):n
+                    slabels_k = sorted_labels[k]
+                    append!(CRindexs[slabels_fus], CRindexs[slabels_k]) # add region at i+1 to det_j
+                    areas[slabels_fus] += areas[slabels_k] # add volume
+                    for ind=1:N_test^d
+                        if(CRlabel_test_X[ind] == slabels_k)
+                            CRlabel_test_X[ind] = slabels_fus
+                        end
+                    end 
+                end
+                for k=(det_j+1):n
+                    slabels_k = sorted_labels[k]
+                    for ind=1:N_test^d
+                        if(CRlabel_test_X[ind] >= slabels_k+1)
+                            count_l[ind] += 1
+                        end
+                    end
+                end
+                CRlabel_test_X = CRlabel_test_X - count_l
+                for k=(det_j+1):n
+                    slabels_k = sorted_labels[n + det_j + 1 - k]
+                    deleteat!(CRindexs, slabels_k) # remove region at k+1
+                    deleteat!(areas, slabels_k)
+                end
                 # add the element to the region
-                CRlabel_test_X[i] = sorted_labels[2]
+                CRlabel_test_X[i] = sorted_labels[det_j]
                 
                 min_previous_n = minimum(nlabels[(d+1):(2d)])
                 # add the element if it is on the region boundary
                 if(min_previous_n == 0)
-                    append!(CRindexs[sorted_labels[2]], i)
+                    append!(CRindexs[sorted_labels[det_j]], i)
                 end
 
                 # volume calculus
-                areas[sorted_labels[2]] += compute_volume(i, CRlabel_test_X, N_test, d)
+                areas[sorted_labels[det_j]] += compute_volume(i, CRlabel_test_X, N_test, d)
             
             else # if there isn't any region in the neighbourhood, we add a new region
                 append!(CRindexs, [[i]])
@@ -767,9 +805,6 @@ function ConnectedToHypercube(K, boundary_inds, labels, N_test, dim)
             while(l != -1)
                 n = sum([l[k]*N_test^(k-1) for k=1:dim]) + 1
                 if(labels[n] == 0)
-                    if(j == [17, 15])
-                        print("\n (i,j) = ", "(", i, " , ", j, ") , numi = ", l)
-                    end
                     stop = true
                     break
                 end
@@ -814,8 +849,7 @@ function showGrid(model, params, eval_inf, X)
 end
 
 # displays the metric linear interpolation solution based on the pre-computed solution alpha and the grid X
-function display_sol_lin(a, b, alpha, X, p)
-    N = length(alpha)
+function display_sol(a, b, f, params)
     x = LinRange(a, b, 100)
     y = LinRange(a, b, 100)
     col = zeros(100, 100)
@@ -823,18 +857,9 @@ function display_sol_lin(a, b, alpha, X, p)
     maxi = 0.0
     for i=1:100
         for j=1:100
-            val = sum([alpha[k]*dist([x[i], y[j]], X[k, :])^p for k=1:N])
-            #col[j,i] = val + (1 - val)*(val > 1) - val*(val < 0)
-            col[j,i] = (1/(1+exp(-val)))
-            if(col[j, i] < mini)
-                mini = col[j, i]
-            end
-            if(col[j, i] > maxi)
-                maxi = col[j, i]
-            end
+            col[j,i] = f([x[i], y[j]], params)
         end
     end
-    col = (col .- mini)/(maxi - mini)
     heatmap(y, x, col)
 end
 
@@ -847,8 +872,10 @@ function success_rate(model, params, eval_inf, grid, val)
     count_type_II = 0
     count_reals = 0
     for i=1:n_test
-        if(model(grid[i, :], params) > eval_inf)
+        if(val[i] <= eval_inf)
             count_reals += 1
+        end
+        if(model(grid[i, :], params) > eval_inf)
             if(val[i] <= eval_inf) # It would success but we think it is a failure
                 count_type_I += 1
             end
@@ -867,43 +894,58 @@ function success_rate(model, params, eval_inf, grid, val)
     end
 end
 
-function errorII_assembly_cube(params_true, params_hat)
+function success_rate_assembly_cube(a, b, params_true, params_hat)
     K1 = length(params_true)
     K2 = length(params_hat)
     A = Vector{Vector{Vector{Float64}}}()
+    d = length(a)
     for i=1:K1
         for j=1:K2
             append!(A, [cube_intersect(params_true[i], params_hat[j])])
         end
     end
-    print("A", A)
+    # print("A = ", A, "\n")
     # calculus lambda(U_{i=1}^{k1 k2} A_i) ...
-    return 1.0 - assembly_cube_measurement(A)/assembly_cube_measurement(params_hat)
+    Dv_inter_Dhat = assembly_cube_measurement(A)
+    Dv = assembly_cube_measurement(params_true)
+    Dhat = assembly_cube_measurement(params_hat)
+    D = cube_measurement([[a[k], b[k]] for k=1:d])
+    return (Dv - Dv_inter_Dhat)/(D - Dhat), 1.0 - (Dv_inter_Dhat/Dhat)
 end
 
 
 # retrieve the model from metric interpolation with params = [alpha, grid, inter_inf] (where alpha is the interpolation restult, grid is the grid used to interpolate, and inter_inf is the sensibility)
-function retrieve_model(x, params)
+function retrieve_metric_model(x, params)
     alpha = params[1]
     grid = params[2]
-    interpolation_inf = params[3]
+    s = params[3]
+    interpolation_inf = params[4]
     N_train = size(grid, 1)
-    return sum([alpha[k]*dist(x, grid[k, :]) for k=1:N_train]) > interpolation_inf
+    return sum([alpha[k]*dist(x, grid[k, :])^s for k=1:N_train]) > interpolation_inf
 end
 
-# Hammersley test for abstract retrieved model on a group of cube model
-begin
-    dims = 2:8
-    model_params = [[[0.0, 1.0], [0.0, 0.8], [0.1, 0.9], [0.3, 1.0], [-1.0, -0.2], [-1.0, 1.0], [-1.0, -0.6], [-1.0, 1.0]], [[-1.0, -0.4], [-0.9, -0.2], [0.4, 1.0], [-1.0, 1.0], [-0.9, -0.3], [0.7, 1.0], [-0.8, -0.4], [-0.5, 0.5]]]
-    n_tests = [70, 70, 24, 12, 8, 6, 4]
-    Ham_nums = [2, 3, 5, 7, 11, 13, 17]
-    a_effs = LinRange(0.0, 1.0, 100)
-    a = fill(-1.0, 8) # minimum boundaries
-    b = fill(1.0, 8) # maximum boundaries
-    errorsI = zeros(7, 100)
-    errorsII = zeros(7, 100)
+function retrieve_gauss_model(x, params)
+    alpha = params[1]
+    grid = params[2]
+    sig = params[3]
+    interpolation_inf = params[4]
+    N_train = size(grid, 1)
+    return sum([alpha[k]*exp(-dist(x, grid[k, :])^2/(2sig^2)) for k=1:N_train]) > interpolation_inf
+end
 
-    for i=1:7
+# Hammersley test for metric interpolation on a group of cube model
+begin
+    dims = 2:6
+    model_params = [[[0.0, 1.0], [0.0, 0.8], [0.1, 0.9], [0.3, 1.0], [-1.0, -0.2], [-1.0, 1.0]], [[-1.0, -0.4], [-0.9, -0.2], [0.4, 1.0], [-1.0, 1.0], [-0.9, -0.3], [0.7, 1.0]]]
+    n_tests = [316, 46, 17, 10, 6]
+    Ham_nums = [2, 3, 5, 7, 11]
+    a_effs = LinRange(0.01, 0.99, 20)
+    a = fill(-1.0, 6) # minimum boundaries
+    b = fill(1.0, 6) # maximum boundaries
+    errorsI = zeros(5, 20)
+    errorsII = zeros(5, 20)
+
+    for i=1:5
         dim = dims[i]
 
         # Change parameters depending on dimension
@@ -917,22 +959,38 @@ begin
         # solve interpolation
         alpha = interpolation_lin(assembly_cube_model, model_params_dim, Ham_X, 1)
 
-        # validation for different values of a_eff
-        val = [f_metric_lin(test_X[i, :], [Ham_X, 1, alpha]) for i=1:n_tests[i]^dim]
-        for j=1:100
-            errorsI[i, j], errorsII[i, j] = success_rate(assembly_cube_model, model_params_dim, 0.8, test_X, val)
+        # validation for different values of a_effs
+        #val = [f_metric_lin(test_X[i, :], [Ham_X, 1, alpha]) for i=1:n_tests[i]^dim]
+        for j=1:20
+            # No Projection
+            #errorsI[i, j], errorsII[i, j] = success_rate(assembly_cube_model, model_params_dim, 1 - a_effs[j], test_X, val)
+            #=
+            # Big Projection
+            print("n = ",n_tests[dim-1])
+            CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_metric_model, [alpha, Ham_X, 1, 1 - a_effs[j]], 1 - a_effs[j], a[1:dim], b[1:dim], n_tests[dim-1])
+            D_hat = assembly_cube_hull([CR_grid[CR_indexs[m], :] for m=1:length(CR_indexs)])
+            D_v = model_params_dim
+            errorsI[i, j], errorsII[i, j] = success_rate_assembly_cube(a, b, D_v, D_hat)
+            =#
+            #=
+            # Sharp Projection
+            CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_metric_model, [alpha, Ham_X, 1, 1 - a_effs[j]], 1 - a_effs[j], a[1:dim], b[1:dim], n_tests[dim-1])
+            cubes, areas = ConnectedToHypercube(4, CR_indexs[ind], labels, n_tests[j], dim)
+            TODO : Create the model generated
+            =#
         end
     end
-    #plot(a_effs, [errorsI[1, :], errorsI[2, :], errorsI[3, :], errorsI[4, :], errorsI[5, :], errorsI[6, :], errorsI[7, :], errorsI[8, :], errorsI[9, :]], ylim=[0, 1], grid=false, w=[1 1], linestyle=[:solid :solid], label=["e_I (d=2)" "e_I (d=3)" "e_I (d=4)" "e_I (d=5)" "e_I (d=6)" "e_I (d=7)" "e_I (d=8)"])
-    plot(a_effs, [errorsII[1, :], errorsII[2, :], errorsII[3, :], errorsII[4, :], errorsII[5, :], errorsII[6, :], errorsII[7, :]], ylim=[0, 1], grid=false, w=[1 1 1 1 1 1 1 1 1], linestyle=[:solid :solid], label=["eII (d=2)" "eII (d=3)" "eII (d=4)" "eII (d=5)" "eII (d=6)" "eII (d=7)" "eII (d=8)"])
+    plot(a_effs, [errorsI[1, :], errorsI[2, :], errorsI[3, :], errorsI[4, :], errorsI[5, :]], ylim=[0, 0.1], grid=false, w=[1 1], linestyle=[:solid :solid], label=["eI (d=2)" "eI (d=3)" "eI (d=4)" "eI (d=5)" "eI (d=6)"])
+    #plot(a_effs, [a_effs, errorsII[1, :], errorsII[2, :], errorsII[3, :], errorsII[4, :], errorsII[5, :]], ylim=[0, 1], grid=false, w=[1 1], linestyle=[:dot :solid :solid :solid :solid :solid], label=["alpha_eff" "eII (d=2)" "eII (d=3)" "eII (d=4)" "eII (d=5)" "eII (d=6)"])
 end
+
 #=
-# Test for theory estimation
+# Test for theory estimation consistency
 begin
     # Parameters
     dim = 2
     model_params = [[[0.0, 1.0], [0.0, 0.8], [0.1, 0.9]], [[-1.0, -0.4], [-0.9, -0.2], [0.4, 1.0]]]
-    n_test = 100
+    n_test = 1000
     n0 = 10 # warning : no odd integer
     interpolation_inf = 0.8
     a = fill(-1.0, dim) # minimum boundaries
@@ -947,22 +1005,22 @@ begin
     Ham_X = Hammersley_grid(a, b, Ham_nums[1:(dim-1)], 24)
     alpha = interpolation_lin(assembly_cube_model, model_params_dim, Ham_X, 1)
 
-    CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_model, [alpha, Ham_X, 0.8], 0.8, a, b, 20)
+    CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_metric_model, [alpha, Ham_X, 1, 0.8], 0.8, a, b, 20)
     D_hat = assembly_cube_hull([CR_grid[CR_indexs[m], :] for m=1:length(CR_indexs)])
 
     D_v = model_params_dim
-    err = errorII_assembly_cube(D_v, D_hat)
+    err = success_rate_assembly_cube(a, b, D_v, D_hat)
     val = [assembly_cube_model(test_X[i, :], D_hat) for i=1:n_test^2]
     err2 = success_rate(assembly_cube_model, model_params_dim, 0.8, test_X, val)
     print(D_v, "\n")
     print(D_hat, "\n")
-    print("error type II with theory : ", err)
-    print("error type II with abstract : ", err2[2])
+    print("error with theory : ", err)
+    print("\n error with abstract : ", err2)
 end
 =#
 #=
 begin
-    
+TODO : adaptive grid cube test
 end
 =#
 #=
@@ -971,7 +1029,7 @@ begin
     # Parameters
     dim = 3
     model_params = [[[0.0, 1.0], [0.0, 0.8], [0.1, 0.9]], [[-1.0, -0.4], [-0.9, -0.2], [0.4, 1.0]]]
-    n_test = 70
+    n_test = 100
     n0 = 10 # warning : no odd integer
     interpolation_inf = 0.8
     a = fill(-1.0, dim) # minimum boundaries
@@ -989,9 +1047,10 @@ begin
     print("adapt_X (cutline) : success \n")
     adapt_X_cube, minim, Maxim = adaptive_grid_cube(assembly_cube_model, model_params, 0.1, a, b, 3e-1, 100, K)
     print("adapt_X_cube (exploit) : success \n")
+    print(adapt_X_cube, "\n")
     quad_X = quad_fill(a, b)
     print("quad_X (regular) : success \n")
-    Ham_X = Hammersley_grid(a, b, Ham_nums[1:(dim-1)], 1000)
+    Ham_X = Hammersley_grid(a, b, Ham_nums[1:(dim-1)], 10)
     print("Ham_X (hammersley) : success \n")
     center_X = center_based_grid(a, b, 100, 5)
     print("center_X (RCC) : success \n")
@@ -1007,28 +1066,31 @@ begin
 
     =#
     
-    # interpolation test on Hammersley grid
-    alpha = interpolation_lin(assembly_cube_model, model_params, Ham_X, 1)
+    # metric interpolation test on Hammersley grid
+    alpha_m = interpolation_lin(assembly_cube_model, model_params, Ham_X, 1)
     print("metric interpolation : success \n")
-    val = [f_metric_lin(test_X[i, :], [Ham_X, 1, alpha]) for i=1:n_test^dim] # can take a lot of time, but necessary
+    val = [f_metric_lin(test_X[i, :], [alpha_m, Ham_X, 1]) for i=1:n_test^dim] # can take a lot of time, but necessary
     print("value compute : success \n")
     err = success_rate(assembly_cube_model, model_params, interpolation_inf, test_X, val)
     print("\n Taux erreur type I : ", err[1], "\n")
     print("Taux erreur type II : ", err[2])
-    
+
+    # gaussian interpolation
+    alpha_g = interpolation_gauss(assembly_cube_model, model_params, Ham_X, 0.33)
 
     # Show the results
-    #showGrid(retrieve_model, [alpha, Ham_X, interpolation_inf], interpolation_inf, test_X)
+    #showGrid(f_metric_lin, [alpha_m, Ham_X, 1], interpolation_inf, test_X)
+    #showGrid(f_gauss, [alpha_g, Ham_X, 0.33], interpolation_inf, test_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, test_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, center_X)
     #showGrid(cube_model, model_params, interpolation_inf, quad_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X)
 
-    #display_sol_lin(-1.0, 1.0, alpha, adapt_X, 1)
-    #display_sol_lin(-1.0, 1.0, alpha, Ham_X, 1)
+    #display_sol(-1.0, 1.0, f_metric_lin, [alpha_m, Ham_X, 1])
+    #display_sol(-1.0, 1.0, f_gauss, [alpha_g, Ham_X, 0.33])
     #display_sol_lin(-1.0, 1.0, alpha, center_X, 1)
 
-    #showGrid(assembly_cube_model, model_params, interpolation_inf, Ham_X)
+    showGrid(assembly_cube_model, model_params, interpolation_inf, Ham_X)
     #print(minim, "\n", Maxim, "\n retrieved with ", size(adapt_X_cube, 1), " points with dimension ", dim, "\n")
     #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X_cube)
     #showGrid(assembly_cube_model, [[[minim[i,j], Maxim[i,j]] for j=1:dim] for i=1:K], interpolation_inf, test_X)
@@ -1036,7 +1098,7 @@ begin
 
     #=
     # Connex test
-    CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_model, [alpha, Ham_X, interpolation_inf], interpolation_inf, a, b, 20)
+    CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_metric_model, [alpha, Ham_X, 1, interpolation_inf], interpolation_inf, a, b, 20)
     print("\n areas : ", areas)
     ind = 2
     cubes, areas = ConnectedToHypercube(4, CR_indexs[ind], labels, 20, dim)
