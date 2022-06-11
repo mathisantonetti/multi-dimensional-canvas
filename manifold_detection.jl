@@ -65,9 +65,14 @@ function update_changes(list, elementToAdd, Compare_list, compared_element)
     Returns :
     list updated with elemntToAdd (added to the right place defined by its order)
     =#
-    K = length(Compare_list)
+    if(length(Compare_list) != length(list[:, 1]))
+        print("\n list : ", list)
+        print("\n clist : ", Compare_list)
+    end
+    K = length(Compare_list) 
     new_list = copy(list)
     new_compare_list = copy(Compare_list)
+    dim = length(elementToAdd)
     for k=1:(K-1)
         if(Compare_list[k] < compared_element && compared_element <= Compare_list[k+1])
             Listcat = cat(list[2:k, :], reshape(elementToAdd, 1, dim), dims=1) # add the element
@@ -323,7 +328,7 @@ end
 
     - K : maximal number of hypercubes to return 
 =#
-function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K; returns_full = false)
+function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K; returns_full = false, explore_center = true)
     # Initialization
     dim = length(a)
     m = ones((K, dim))
@@ -343,10 +348,14 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K; 
     X_base[1, :] = (a + b)/2.0
     X_base[2:2^dim+1, :] = quad_fill(a, b)
     for i=2:min(floor(Int, (Nmax-1)/(2^dim)), 2^dim+1)
-        X_base = cat(X_base, quad_fill(min.(2*X_base[i, :], 0), max.(2*X_base[i, :], 0)), dims=1)
+        X_base = cat(X_base, quad_fill(X_base[i, :] - ((b-a)/4), X_base[i, :] + ((b-a)/4)), dims=1)
     end
-
     L_base = size(X_base, 1)
+    
+    if(explore_center == false)
+        X_base = X_base[2:L_base, :]
+        L_base = L_base - 1
+    end
 
     # Processing adaptive grid...
     j = 1
@@ -436,11 +445,12 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K; 
         n = floor(Int, (Nmax - j)/true_K)
         new_M = copy(M)
         new_m = copy(m)
-        new_Kareas = fill(-7.0, dim)
+        new_Kareas = fill(-7.0, K)
         for k=(K-true_K+1):K
-            grid, candidate_m, candidate_M, candidate_Kareas, candidate_full_var = adaptive_grid_cube(model, params, ad_inf, m[k, :], M[k, :], nominal_dist, n, K, returns_full=true)
+            grid, candidate_m, candidate_M, candidate_Kareas, candidate_full_var = adaptive_grid_cube(model, params, ad_inf, m[k, :], M[k, :], nominal_dist, n, K, returns_full=true, explore_center=false)
             X_ada = cat(X_ada, grid, dims=1)
             if(candidate_full_var == false)
+                print("\n candidat : ", candidate_m)
                 for i=1:K
                     new_m, _ = update_changes(new_m, candidate_m[i, :], new_Kareas, candidate_Kareas[i])
                     new_M, newKareas = update_changes(new_M, candidate_M[i, :], new_Kareas, candidate_Kareas[i])
@@ -454,7 +464,7 @@ function adaptive_grid_cube(model, params, ad_inf, a, b, nominal_dist, Nmax, K; 
     if(returns_full)
         return X_ada, m, M, Kareas, full_var
     else
-        return X_ada, m, M
+        return X_ada, m[(K - true_K + 1):K, :], M[(K - true_K + 1):K, :]
     end
 end
 
@@ -582,9 +592,20 @@ end
 function assembly_cube_measurement(params)
     s = 0
     K = length(params)
-    if(K == 1)
+    if(K == 0)
+        return 0.0
+    elseif(K == 1)
         return cube_measurement(params[1])
     else
+        d = length(params[1])
+        for i=1:K
+            for j=1:d
+                if(params[i][j][1] == params[i][j][2])
+                    deleteat!(params, i)
+                    return assembly_cube_measurement(params)
+                end
+            end
+        end
         return assembly_cube_measurement(params[1:(K-1)]) - assembly_cube_measurement([cube_intersect(params[k], params[K]) for k=1:(K-1)]) + cube_measurement(params[K])
     end
 end
@@ -628,6 +649,11 @@ function LassoEN(Y, X, γ, λ = 0)
 end
 
 # Converting Tools
+# Converts {Mat1, Mat2} to Vector{Vector}
+function MatToVec(Mat1, Mat2)
+    n, p = size(Mat1)
+    return [[[Mat1[i, j], Mat2[i, j]] for j=1:p] for i=1:n]
+end
 
 # translates a List into a Tuple (for scatter use)
 function ListToTuple(X)
@@ -910,7 +936,11 @@ function success_rate_assembly_cube(a, b, params_true, params_hat)
     Dv = assembly_cube_measurement(params_true)
     Dhat = assembly_cube_measurement(params_hat)
     D = cube_measurement([[a[k], b[k]] for k=1:d])
-    return (Dv - Dv_inter_Dhat)/(D - Dhat), 1.0 - (Dv_inter_Dhat/Dhat)
+    if(Dhat == 0.0)
+        return NaN, NaN
+    else
+        return (Dv - Dv_inter_Dhat)/(D - Dhat), 1.0 - (Dv_inter_Dhat/Dhat)
+    end
 end
 
 
@@ -932,7 +962,7 @@ function retrieve_gauss_model(x, params)
     N_train = size(grid, 1)
     return sum([alpha[k]*exp(-dist(x, grid[k, :])^2/(2sig^2)) for k=1:N_train]) > interpolation_inf
 end
-
+#=
 # Hammersley test for metric interpolation on a group of cube model
 begin
     dims = 2:6
@@ -983,7 +1013,7 @@ begin
     plot(a_effs, [errorsI[1, :], errorsI[2, :], errorsI[3, :], errorsI[4, :], errorsI[5, :]], ylim=[0, 0.1], grid=false, w=[1 1], linestyle=[:solid :solid], label=["eI (d=2)" "eI (d=3)" "eI (d=4)" "eI (d=5)" "eI (d=6)"])
     #plot(a_effs, [a_effs, errorsII[1, :], errorsII[2, :], errorsII[3, :], errorsII[4, :], errorsII[5, :]], ylim=[0, 1], grid=false, w=[1 1], linestyle=[:dot :solid :solid :solid :solid :solid], label=["alpha_eff" "eII (d=2)" "eII (d=3)" "eII (d=4)" "eII (d=5)" "eII (d=6)"])
 end
-
+=#
 #=
 # Test for theory estimation consistency
 begin
@@ -1018,20 +1048,51 @@ begin
     print("\n error with abstract : ", err2)
 end
 =#
+# Adaptive Grids Test
 #=
 begin
-TODO : adaptive grid cube test
+    #model_params = [[[0.0, 1.0], [0.0, 0.8], [0.1, 0.9], [0.3, 1.0], [-1.0, -0.2], [-1.0, 1.0], [-1.0, -0.6], [0.4, 0.7], [-1.0, 1.0], [0.0, 1.0]], [[-1.0, -0.4], [-0.9, -0.2], [0.4, 1.0], [-1.0, 1.0], [-0.9, -0.3], [0.7, 1.0], [-1.0, -0.6], [-0.4, 0.1], [0.001, 0.5], [-0.6, -0.2]]] # modele difficile
+    model_params = [[[0.0, 1.0], [0.0, 0.8], [0.1, 0.9], [0.3, 1.0], [-1.0, -0.2], [-1.0, 1.0], [-1.0, 0.0], [0.0, 1.0], [-1.0, 1.0], [0.0, 1.0]], [[-1.0, -0.4], [-0.9, -0.2], [0.4, 1.0], [-1.0, 1.0], [-0.9, -0.3], [0.7, 1.0], [-0.8, -0.3], [0.0, 1.0], [-1.0, 0.0], [-1.0, 1.0]]] # modele facile
+    test_dists = LinRange(1e-3, 0.1, 100)
+    a = fill(-1.0, 10) # minimum boundaries
+    b = fill(1.0, 10) # maximum boundaries
+    Kmax = 5
+    errorsI = zeros(9, 100)
+    errorsII = zeros(9, 100)
+    
+    for dim=2:10
+        model_params_dim = [model_params[1][1:dim], model_params[2][1:dim]]
+
+        for j=1:100
+            adapt_X_cube, minim, Maxim = adaptive_grid_cube(assembly_cube_model, model_params_dim, 0.1, a[1:dim], b[1:dim], test_dists[j], 1000, Kmax)
+            #print("\n", minim)
+            errorsI[dim-1, j], errorsII[dim-1, j] = success_rate_assembly_cube(a, b, model_params_dim, MatToVec(minim, Maxim))
+        end
+    end
+
+    #plot(test_dists, [errorsI[1, :], errorsI[2, :], errorsI[3, :], errorsI[4, :], errorsI[5, :]], ylim=[0, 0.002], grid=false, w=[1 1], linestyle=[:solid :solid], label=["eI (d=2)" "eI (d=3)" "eI (d=4)" "eI (d=5)" "eI (d=6)"])
+    plot(test_dists, [errorsI[1, :], errorsI[2, :], errorsI[3, :], errorsI[4, :], errorsI[5, :], errorsI[6, :], errorsI[7, :], errorsI[8, :], errorsI[9, :]], ylim=[0, 0.002], grid=false, w=[1 1], linestyle=[:solid :solid], label=["eI (d=2)" "eI (d=3)" "eI (d=4)" "eI (d=5)" "eI (d=6)" "eI (d=7)" "eI (d=8)" "eI (d=9)" "eI (d=10)"])
+    #plot(test_dists, [errorsII[1, :], errorsII[2, :], errorsII[3, :], errorsII[4, :], errorsII[5, :]], ylim=[0, 1], grid=false, w=[1 1], linestyle=[:solid], label=["eII (d=2)" "eII (d=3)" "eII (d=4)" "eII (d=5)" "eII (d=6)"])
+    #=
+    model_params_dim = [model_params[1][1:6], model_params[2][1:6]]
+    adapt_X_cube, minim, Maxim = adaptive_grid_cube(assembly_cube_model, model_params_dim, 0.1, a[1:6], b[1:6], test_dists[10], 1000, Kmax)
+    print("\n minim : ", minim)
+    print("\n maxim : ", Maxim)
+    print("\n retrieved : ", MatToVec(minim, Maxim))
+    #showGrid(assembly_cube_model, model_params, 0.5, adapt_X_cube)
+    =#
 end
 =#
-#=
+
 # Cube models Test
 begin
     # Parameters
-    dim = 3
-    model_params = [[[0.0, 1.0], [0.0, 0.8], [0.1, 0.9]], [[-1.0, -0.4], [-0.9, -0.2], [0.4, 1.0]]]
+    dim = 2
+    #model_params = [[[0.1, 0.8], [0.1, 0.5], [0, 0.9]], [[0.3, 0.7], [-0.1, 0.6], [0.4, 1.0]]]
+    model_params= [[[0.0, 1.0], [0.0, 0.8]], [[-1.0, -0.4], [-0.9, -0.2]]]
     n_test = 100
     n0 = 10 # warning : no odd integer
-    interpolation_inf = 0.8
+    interpolation_inf = 0.6
     a = fill(-1.0, dim) # minimum boundaries
     b = fill(1.0, dim) # maximum boundaries
     K = 5 # maximal number of hypercubes to find (should be strictly greater than necessary)
@@ -1045,14 +1106,13 @@ begin
     print("test_X (regular) : success \n")
     adapt_X, minimlin, Maximlin = adaptive_grid_lin(assembly_cube_model, model_params, 0.1, a, b, n0)
     print("adapt_X (cutline) : success \n")
-    adapt_X_cube, minim, Maxim = adaptive_grid_cube(assembly_cube_model, model_params, 0.1, a, b, 3e-1, 100, K)
+    adapt_X_cube, minim, Maxim = adaptive_grid_cube(assembly_cube_model, model_params, 0.1, a, b, 1e-1, 100, K)
     print("adapt_X_cube (exploit) : success \n")
-    print(adapt_X_cube, "\n")
     quad_X = quad_fill(a, b)
     print("quad_X (regular) : success \n")
-    Ham_X = Hammersley_grid(a, b, Ham_nums[1:(dim-1)], 10)
+    Ham_X = Hammersley_grid(a, b, Ham_nums[1:(dim-1)], 1000)
     print("Ham_X (hammersley) : success \n")
-    center_X = center_based_grid(a, b, 100, 5)
+    center_X = center_based_grid(a, b, 1000, 7)
     print("center_X (RCC) : success \n")
     # Test of Validity with a toymodel of linear metric interpolation
     #=
@@ -1076,24 +1136,26 @@ begin
     print("Taux erreur type II : ", err[2])
 
     # gaussian interpolation
-    alpha_g = interpolation_gauss(assembly_cube_model, model_params, Ham_X, 0.33)
+    sigmaused = maximum(b-a)/((1000)^(1/dim))
+    alpha_g = interpolation_gauss(assembly_cube_model, model_params, Ham_X, sigmaused)
 
     # Show the results
     #showGrid(f_metric_lin, [alpha_m, Ham_X, 1], interpolation_inf, test_X)
-    #showGrid(f_gauss, [alpha_g, Ham_X, 0.33], interpolation_inf, test_X)
+    #showGrid(f_gauss, [alpha_g, Ham_X, sigmaused], interpolation_inf, test_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, test_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, center_X)
     #showGrid(cube_model, model_params, interpolation_inf, quad_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X)
 
-    #display_sol(-1.0, 1.0, f_metric_lin, [alpha_m, Ham_X, 1])
-    #display_sol(-1.0, 1.0, f_gauss, [alpha_g, Ham_X, 0.33])
-    #display_sol_lin(-1.0, 1.0, alpha, center_X, 1)
+    display_sol(-1.0, 1.0, f_metric_lin, [alpha_m, Ham_X, 1])
+    #display_sol(-1.0, 1.0, f_gauss, [alpha_g, Ham_X, sigmaused])
 
-    showGrid(assembly_cube_model, model_params, interpolation_inf, Ham_X)
+    #showGrid(assembly_cube_model, model_params, interpolation_inf, Ham_X)
     #print(minim, "\n", Maxim, "\n retrieved with ", size(adapt_X_cube, 1), " points with dimension ", dim, "\n")
     #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X_cube)
-    #showGrid(assembly_cube_model, [[[minim[i,j], Maxim[i,j]] for j=1:dim] for i=1:K], interpolation_inf, test_X)
+    #print(minim)
+    #tK = length(minim[:, 1])
+    #showGrid(assembly_cube_model, [[[minim[i,j], Maxim[i,j]] for j=1:dim] for i=1:tK], interpolation_inf, test_X)
     #print(minimlin, "\n", Maximlin, "\n retrieved with ", size(adapt_X, 1), " points with dimension ", dim, "\n")
 
     #=
@@ -1128,4 +1190,3 @@ begin
     display_sol_lin(-1.0, 1.0, alpha, center_X, 1)
     =#
 end
-=#
