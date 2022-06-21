@@ -58,7 +58,7 @@ function update_changes(list, elementToAdd, Compare_list, compared_element)
     #=
     Parameters :
     _ list : list of elements sorted with the order defined by Compare_list
-    _ elemntsToAdd : the element to update list
+    _ elemntsToAdd : the element to add to list if compared_element greater than one in list.
     _ Compare_list : list of real numbers defining the order of list
     _ compared_element : real number defining the order
 
@@ -117,8 +117,16 @@ function isIncludedInOneHC(H1, list_H2)
     return false
 end
 
-# returns the decomposition in the base of n with strict maximal n of base^d 
 function decompo_base(n, d; base=10)
+    #=
+    Parameters :
+    _ n : Number to return
+    _ d : return format control
+    _ base : base control
+
+    Returns :
+    [a1, ..., ad] such that n = a1 + a2*base + ... + ad*base^(d-1) (base decomposition)    
+    =#
     res = zeros(Int, d)
     x0 = n
     for i=1:d
@@ -131,8 +139,16 @@ end
 
 # Grid Tools
 
-# returns a regular grid in dimension dim with boundaries [a[1], b[1]]x...x[a[dim], b[dim]]
 function regular_grid(a, b, N)
+    #=
+    Parameters :
+    _ a : minimum boundaries of [a, b]
+    _ b : maximum boundaries of [a, b]
+    _ N : number of points per coordinates
+
+    Returns :
+    a centered regular grid X of N^d points (where d is the dimension of a)    
+    =#
     dim = length(a)
     Y = zeros((N^dim, dim))
     c = LinRange(a[dim] + (b[dim]-a[dim])/(2N), b[dim] - (b[dim]-a[dim])/(2N), N)
@@ -153,8 +169,15 @@ function regular_grid(a, b, N)
     end
 end
 
-# one step for the center based grid sequence, receive Vn and returns Vn+1
 function step_seq_center(Vn, s)
+    #=
+    Parameters :
+    _ Vn : n-th term of the sequence Vs
+    _ s : control of the sequence Vs 
+
+    Returns :
+    _ V(n+1) : (n+1)-th term of the sequence Vs    
+    =#
     kn = Vn[1]
     jn = Vn[2]
     if(jn >= 3)
@@ -165,6 +188,16 @@ function step_seq_center(Vn, s)
 end
 
 function center_line(a, b, V)
+    #=
+    Parameters :
+    _ a : minimum boundaries of [a, b]
+    _ b : maximum boundaries of [a, b]
+    _ V : tuple (k, j) giving the decision for drawing the lines
+
+    Returns :
+    _ Matrix Line which is the grid corresponding to V
+    _ int i - 1 : length of Line 
+    =#
     k = V[1]
     j = V[2]
     d = length(a)
@@ -199,6 +232,16 @@ function center_line(a, b, V)
 end
 
 function center_based_grid(a, b, N, s)
+    #=
+    Parameters :
+    _ a : minimum boundaries of [a, b]
+    _ b : maximum boundaries of [a, b]
+    _ N : maximal number of points in the grid
+    _ s : control of the grid sequence (represents the minimum distance between points of the grid)
+
+    Returns :
+    _ X : the center-based grid more and more precisely filling each hypercube of maximal size 
+    =#
     current_V = [1, 1]
     j = 1
     X = zeros(Float64, 0)
@@ -221,6 +264,14 @@ end
 
 # Van Der Corput function
 function Van_Der_Corput_g(b, n)
+    #=
+    Parameters :
+    _ b : decoding base
+    _ n : number to represent
+
+    Returns :
+    sum_i d_i b^(-i) where n = sum_i d_i b^(i-1)
+    =#
     m = n
     dk = zeros(Int64, 0)
     while(m >= 2)
@@ -235,6 +286,16 @@ end
 
 # Hammersley sequence diluted in [a[1], c[1]]x[a[2], c[2]]x...x[a[d], c[d]]
 function Hammersley_grid(a, c, b, N)
+    #=
+    Parameters :
+    _ a : minimum boundaries of [a, c]
+    _ c : maximum boundaries of [a, c]
+    _ b : base for Van Der Corput function : [b_1, ..., b_(d-1)] where pgcd(b_i, b_j) = 1 for all i not equal to j
+    _ N : number of points
+
+    Returns :
+    _ x : Hammersley grid generated with b and N points    
+    =#
     s = length(b) # = d - 1
     x = zeros((N, s+1))
     for i=1:N
@@ -247,6 +308,17 @@ function Hammersley_grid(a, c, b, N)
 end
 
 function LineArange(a, b, pos, n0, i)
+    #=
+    Parameters :
+    _ a : minimum boundaries of [a, b]
+    _ b : maximum boundaries of [a, b]
+    _ pos : position of the hyperplan where the line is drawn
+    _ n0 : number of points
+    _ i : drawing dimension 
+
+    Returns :
+    _ Matrix Y : line generated with the given parameters    
+    =#
     dim = length(a)
     Y = zeros((n0, dim))
     c = LinRange(a[i]+(b[i]-a[i])/(2n0), b[i]-(b[i]-a[i])/(2n0), n0)
@@ -261,6 +333,21 @@ end
 
 # returns the cut (deduced from the model with condition model > ad_inf) of the line going through the dimension i
 function cutline(model, params, ad_inf, line, a, b, n0, i)
+    #=
+    Parameters :
+    _ model : used model
+    _ params : used model parameters
+    _ ad_inf : used model control (model > ad_inf)
+    _ line : the position in the hyperplan to draw & cut the line
+    _ a : minimum boundaries of [a, b]
+    _ b : maximum boundaries of [a, b]
+    _ n0 : number of points
+    _ i : the dimension the line is going through
+
+    Returns :
+    _ Y : the line produced
+    _ [m, M] : the cut 1D-region boundaries
+    =#
     dim = length(line) + 1
     Y = zeros((n0, dim))
     c = LinRange(a[i]+(b[i]-a[i])/(2n0), b[i]-(b[i]-a[i])/(2n0), n0)
@@ -292,6 +379,15 @@ end
 
 # fills the holes with 2^dim point in the hypercube generated by [[m[1], M[1]], ..., [m[d], M[d]], and imbricate itself until Nmax
 function quad_fill(m, M, Nmax)
+    #=
+    Parameters :
+    _ m : minimum boundaries of [m, M]
+    _ M : maximum boundaries of [m, M]
+    _ Nmax : maximal number of points
+
+    Returns :
+    _ X : a grid exploring with a regular grid 2 by 2 by ... and then with a regular grid 4 by 4 by ... etc... until it has Nmax points    
+    =#
     X = regular_grid(m, M, 2)
     if(length(X[:, 1]) > Nmax)
         X = X[1:Nmax, :]
@@ -309,6 +405,18 @@ end
 
 # returns an adaptive grid generated with cutlines and quadfills with boundaries [a[1], b[1]]x...x[a[dim], b[dim]]
 function adaptive_grid_lin(model, params, ad_inf, a, b, n0)
+    #=
+    Parameters :
+    _ model : used model
+    _ params : used model parameters
+    _ ad_inf : used analysis control (criteria) (model > ad_inf)
+    _ a : minimum boundaries of [a, b]
+    _ b : maximum boundaries of [a, b]
+    _ n0 : number of points per lines
+
+    Returns :
+    _ X : adaptive grid of (d*n0 + 2^d) points using the cutline strategy, where d is the dimension of the problem 
+    =#
     dim = length(a)
     middle = ((a + b)/2)[1:(dim - 1)]
     X = zeros((n0*dim + 2^dim, dim))
@@ -320,7 +428,7 @@ function adaptive_grid_lin(model, params, ad_inf, a, b, n0)
             middle[d] = (m[d] + M[d])/2
         end
     end
-    X[(dim*n0+1):(dim*n0+2^dim), :] = quad_fill(m, M)
+    X[(dim*n0+1):(dim*n0+2^dim), :] = quad_fill(m, M, 2^dim)
     return X, m, M
 end
 
@@ -729,6 +837,50 @@ function compute_volume(n, X_labels, N_test, d)
     return 1
 end
 
+function fuse_regions!(CRindexs, CRlabel_test_X, areas, sorted_labels, N_test, d, det_j)
+    #=
+    Parameters :
+    _ CRindexs : list of indexs representing the regions
+    _ CRlabel_test_X : labels of the points in test_X (the grid)
+    _ areas : list of the area size for each region
+    _ sorted_labels : sorted list of labels of the neighbourhood
+    _ N_test : number of points per coordinate
+    _ d : dimension of the problem vector space 
+    _ det_j : first region to check
+
+    Returns :
+    Nothing
+    =#
+    n = length(sorted_labels)
+    slabels_fus = sorted_labels[det_j]
+    slabels_k = slabels_fus
+    count_l = zeros(N_test^d)
+    for k=(det_j+1):n
+        slabels_k = sorted_labels[k]
+        append!(CRindexs[slabels_fus], CRindexs[slabels_k]) # add region at i+1 to det_j
+        areas[slabels_fus] += areas[slabels_k] # add volume
+        for ind=1:N_test^d
+            if(CRlabel_test_X[ind] == slabels_k)
+                CRlabel_test_X[ind] = slabels_fus
+            end
+        end 
+    end
+    for k=(det_j+1):n
+        slabels_k = sorted_labels[k]
+        for ind=1:N_test^d
+            if(CRlabel_test_X[ind] >= slabels_k+1)
+                count_l[ind] += 1
+            end
+        end
+    end
+    CRlabel_test_X = CRlabel_test_X - count_l
+    for k=(det_j+1):n
+        slabels_k = sorted_labels[n + det_j + 1 - k]
+        deleteat!(CRindexs, slabels_k) # remove region at k+1
+        deleteat!(areas, slabels_k)
+    end
+end
+
 # Returns the connected regions where forall x, model(x, params) > eval_inf
 function AbstractToConnected(model, params, eval_inf, a, b, N_test)
     test_X = regular_grid(a, b, N_test)
@@ -741,40 +893,15 @@ function AbstractToConnected(model, params, eval_inf, a, b, N_test)
         if(model(test_X[i, :], params) > eval_inf) # if test_X[i] is considered a good parameter
             if(max_label >= 1) # if there exists a neighbour s of test_X[i] in X such that CR_label_test_X[s] >= 1 
                 sorted_labels = sort(unique(nlabels), alg=QuickSort)
-                n = length(sorted_labels)
 
-                # fuse all regions in the neighbourhood
-                det_j = 2
+                det_j = 2 # first region to check (second if we have 0 which represent failure)
                 if(sorted_labels[1] >= 1)
                     det_j = 1
                 end
-                slabels_fus = sorted_labels[det_j]
-                slabels_k = slabels_fus
-                count_l = zeros(N_test^d)
-                for k=(det_j+1):n
-                    slabels_k = sorted_labels[k]
-                    append!(CRindexs[slabels_fus], CRindexs[slabels_k]) # add region at i+1 to det_j
-                    areas[slabels_fus] += areas[slabels_k] # add volume
-                    for ind=1:N_test^d
-                        if(CRlabel_test_X[ind] == slabels_k)
-                            CRlabel_test_X[ind] = slabels_fus
-                        end
-                    end 
-                end
-                for k=(det_j+1):n
-                    slabels_k = sorted_labels[k]
-                    for ind=1:N_test^d
-                        if(CRlabel_test_X[ind] >= slabels_k+1)
-                            count_l[ind] += 1
-                        end
-                    end
-                end
-                CRlabel_test_X = CRlabel_test_X - count_l
-                for k=(det_j+1):n
-                    slabels_k = sorted_labels[n + det_j + 1 - k]
-                    deleteat!(CRindexs, slabels_k) # remove region at k+1
-                    deleteat!(areas, slabels_k)
-                end
+
+                # fuse all regions in the neighbourhood
+                fuse_regions!(CRindexs, CRlabel_test_X, areas, sorted_labels, N_test, d, det_j)
+                
                 # add the element to the region
                 CRlabel_test_X[i] = sorted_labels[det_j]
                 
@@ -807,18 +934,18 @@ function AbstractToConnected(model, params, eval_inf, a, b, N_test)
     return test_X, CRindexs, CRlabel_test_X, areas
 end
 
-#= 
----
-parameters :
-_ K : number max of hypercubes 
-_ boundary_inds : boundary points indexs (sorted) from a regular grid N_test^dim
-_ N_test : accuracy of the regular grid (number of points per line)
-_ dim : dimension of the elements of the grid
----
-returns the K maximal hypercubes found in the connected region
-=#
-
 function ConnectedToHypercube(K, boundary_inds, labels, N_test, dim)
+    #= 
+    ---
+    parameters :
+    _ K : number max of hypercubes 
+    _ boundary_inds : boundary points indexs (sorted) from a regular grid N_test^dim
+    _ labels : labels of the grid points
+    _ N_test : accuracy of the regular grid (number of points per line)
+    _ dim : dimension of the elements of the grid
+    ---
+    returns the K maximal hypercubes found in the connected region
+    =#
     N = length(boundary_inds)
     digit_BI = [reverse(decompo_base(boundary_inds[i] - 1, dim, base=N_test), dims=1) for i=1:N]
     Kareas = fill(-1, K)
@@ -878,13 +1005,11 @@ function showGrid(model, params, eval_inf, X)
     scatter!(tuple_real_X0, xlims = (-1, 1), ylims = (-1, 1), color = "red", label = "fail")
 end
 
-# displays the metric linear interpolation solution based on the pre-computed solution alpha and the grid X
+# displays the abstract solution f based on the pre-computed solution alpha and the grid X
 function display_sol(a, b, f, params)
     x = LinRange(a, b, 100)
     y = LinRange(a, b, 100)
     col = zeros(100, 100)
-    mini = 1.0
-    maxi = 0.0
     for i=1:100
         for j=1:100
             col[j,i] = f([x[i], y[j]], params)
@@ -1098,7 +1223,7 @@ begin
     #model_params= [[[0.0, 1.0], [0.0, 0.8]], [[-1.0, -0.4], [-0.9, -0.2]]]
     n_test = 100
     n0 = 10 # warning : no odd integer
-    interpolation_inf = 0.6
+    interpolation_inf = 0.85
     a = fill(-1.0, dim) # minimum boundaries
     b = fill(1.0, dim) # maximum boundaries
     K = 3 # maximal number of hypercubes to find (should be strictly greater than necessary)
@@ -1114,9 +1239,9 @@ begin
     print("adapt_X (cutline) : success \n")
     adapt_X_cube, minim, Maxim, areas, _ = adaptive_grid_cube(assembly_cube_model, model_params, 0.1, a, b, 1e-1, 402, K, returns_full = true)
     print("adapt_X_cube (exploit) : success \n")
-    quad_X = quad_fill(a, b)
+    quad_X = quad_fill(a, b, 2^dim)
     print("quad_X (regular) : success \n")
-    Ham_X = Hammersley_grid(a, b, Ham_nums[1:(dim-1)], 1000)
+    Ham_X = Hammersley_grid(a, b, Ham_nums[1:(dim-1)], 300)
     print("Ham_X (hammersley) : success \n")
     center_X = center_based_grid(a, b, 1000, 7)
     print("center_X (RCC) : success \n")
@@ -1148,17 +1273,17 @@ begin
     # Show the results
     #showGrid(f_metric_lin, [alpha_m, Ham_X, 1], interpolation_inf, test_X)
     #showGrid(f_gauss, [alpha_g, Ham_X, sigmaused], interpolation_inf, test_X)
-    showGrid(assembly_cube_model, model_params, interpolation_inf, test_X)
+    #showGrid(assembly_cube_model, model_params, interpolation_inf, test_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, center_X)
     #showGrid(cube_model, model_params, interpolation_inf, quad_X)
     #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X)
 
     #display_sol(-1.0, 1.0, f_metric_lin, [alpha_m, Ham_X, 1])
-    #display_sol(-1.0, 1.0, f_gauss, [alpha_g, Ham_X, sigmaused])
+    display_sol(-1.0, 1.0, f_gauss, [alpha_g, Ham_X, sigmaused])
 
     #showGrid(assembly_cube_model, model_params, interpolation_inf, Ham_X)
     #print(minim, "\n", Maxim, "\n retrieved with ", size(adapt_X_cube, 1), " points with dimension ", dim, "\n")
-    showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X_cube)
+    #showGrid(assembly_cube_model, model_params, interpolation_inf, adapt_X_cube)
     #print(minim)
     #tK = length(minim[:, 1])
     #showGrid(assembly_cube_model, [[[minim[i,j], Maxim[i,j]] for j=1:dim] for i=1:tK], interpolation_inf, test_X)
@@ -1166,16 +1291,16 @@ begin
 
     #=
     # Connex test
-    CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_metric_model, [alpha, Ham_X, 1, interpolation_inf], interpolation_inf, a, b, 20)
+    CR_grid, CR_indexs, labels, areas = AbstractToConnected(retrieve_metric_model, [alpha_m, Ham_X, 1, interpolation_inf], interpolation_inf, a, b, 50)
     print("\n areas : ", areas)
-    ind = 2
-    cubes, areas = ConnectedToHypercube(4, CR_indexs[ind], labels, 20, dim)
+    ind = 1
+    cubes, areas = ConnectedToHypercube(4, CR_indexs[ind], labels, 50, dim)
     print("\n Kareas : ", areas)
     i = 4
     retrieve_params = [sort([CR_grid[cubes[i, 1], 1], CR_grid[cubes[i, 2], 1]]), sort([CR_grid[cubes[i, 1], 2], CR_grid[cubes[i, 2], 2]])]
     print("\n params 1 : ", retrieve_params)
-    showGrid(cube_model, retrieve_params, interpolation_inf, test_X)
-    #showGrid(assembly_cube_model, model_params, interpolation_inf, CR_grid[CR_indexs[ind], :])
+    #showGrid(cube_model, retrieve_params, interpolation_inf, test_X)
+    showGrid(assembly_cube_model, model_params, interpolation_inf, CR_grid[CR_indexs[ind], :])
     =#
     #=
     print(cubes)
