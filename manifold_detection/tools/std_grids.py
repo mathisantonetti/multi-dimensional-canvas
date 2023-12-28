@@ -30,40 +30,46 @@ class Grid():
             plt.scatter(self.points[Id0, 0], self.points[Id0, 1], color="red")
             plt.show()
 
-    def median(self, indices=None, return_indices=False):
+    def median(self, indices=None, return_indices=False, plans=None):
         '''
         Parameters :
         _ indices : list of indices of the points to take into account (default : None)
         _ return_indices : if True, returns the indices of the points in the optimal separations (default : False)
+        _ plans : hyperplans giving the level surfaces for the order used to calculate the median (default : hypercube faces).
 
         Returns :
         _ ind : index of the median point
         _ list_inds : list of the indices of the points in the separations made with the median point (if return_indices = True)
         '''
 
-        if(indices == None):
+        if(indices is None):
             indices = [i for i in range(self.N)]
+
+        if(plans is None):
+            plans = np.eye(self.dim)
 
         n = len(indices)
 
+        Nplan = plans.shape[0]
+
         ind = 0
-        list_inds = [[] for i in range(2*self.dim)]
+        list_inds = [[] for i in range(2*Nplan)]
         opt_value = np.inf
         for i in indices:
             x = self.points[i]
-            new_list_inds = [[] for k in range(2*self.dim)]
+            new_list_inds = [[] for k in range(2*Nplan)]
             for j in indices:
                 if(j == i):
                     continue # skip the point i
 
                 y = self.points[j]
-                for d in range(self.dim):
-                    if(y[d] > x[d]):
+                for d in range(Nplan):
+                    if(np.dot(plans[d], y - x) > 0.0):
                         new_list_inds[2*d].append(j)
                     else:
                         new_list_inds[2*d+1].append(j)
-            p = [len(new_list_inds[2*d]) for d in range(self.dim)]
-            new_value = np.sum([np.abs(p[k] - (n-1)/2) for k in range(self.dim)])
+            p = [len(new_list_inds[2*d]) for d in range(Nplan)]
+            new_value = np.sum([np.abs(p[k] - (n-1)/2) for k in range(Nplan)])
             if(new_value < opt_value):
                 list_inds = new_list_inds
                 ind = i
@@ -85,7 +91,7 @@ class RegularGrid(Grid):
         _ N : number of points per coordinates
         '''
         dim = len(a)
-        super().__init__(a, b, N**dim)
+        super().__init__(dim, N**dim)
         c = np.linspace(a[self.dim-1] + (b[self.dim-1]-a[self.dim-1])/(2*N), b[self.dim-1] - (b[self.dim-1]-a[self.dim-1])/(2*N), N)
         if(self.dim >= 2):
             subgrid = RegularGrid(a[:(self.dim - 1)], b[:(self.dim-1)], N)
@@ -106,11 +112,10 @@ class CenteredGrid(Grid):
         _ N : maximal number of points in the grid
         _ s : control of the grid sequence (represents the minimum distance between points of the grid)
         '''
-        super().__init__(a, b, N)
         a = np.array(a)
         b = np.array(b)
-        dim = a.shape[0]
-        self.points = np.zeros((0,dim))
+        self.dim = a.shape[0]
+        self.points = np.zeros((0,self.dim))
         current_V = [1, 1]
         j = 1
         X = np.zeros(0)
@@ -118,11 +123,13 @@ class CenteredGrid(Grid):
         while(j <= N and current_V[1] >= 1):
             Line, L = self.center_line(a, b, current_V)
             for i in range(L):
-                self.points = np.concatenate((self.points, np.reshape(Line[i, :], (1,dim))), axis=0) # add the element
+                self.points = np.concatenate((self.points, np.reshape(Line[i, :], (1,self.dim))), axis=0) # add the element
                 j += 1
                 if(j > N):
                     break
             current_V = self.step_seq_center(current_V, sc)
+
+        self.N = j-1
 
     def step_seq_center(self, Vn, s):
         """
@@ -187,8 +194,8 @@ class LowDiscrepancyGrid(Grid):
         _ c : base for Van Der Corput function : [c_1, ..., c_(d-1)] where pgcd(c_i, c_j) = 1 for all i not equal to j
         _ N : number of points
         '''
-        super().__init__(a, b, N)
         s = len(c) # = d - 1
+        super().__init__(s+1, N)
         self.points = np.zeros((N, s+1))
         for i in range(N):
             for j in range(s):

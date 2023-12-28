@@ -1,6 +1,6 @@
-import tools.manifolds
-import tools.std_grids
-from tools.basics import *
+import manifold_detection.tools.manifolds
+import manifold_detection.tools.std_grids
+from manifold_detection.tools.basics import *
 import copy
 import numpy as np
 
@@ -62,9 +62,9 @@ def SeparateAndCut(grid, Id1, Id0, errII_m):
 
             # error estimate
             Id0_1 = [] # Id0 for domain 1
-            cube1 = tools.manifolds.Cube(params_domain1[0], params_domain1[1])
+            cube1 = manifold_detection.tools.manifolds.Cube(params_domain1[0], params_domain1[1])
             Id0_2 = [] # Id0 for domain 2
-            cube2 = tools.manifolds.Cube(params_domain2[0], params_domain2[1])
+            cube2 = manifold_detection.tools.manifolds.Cube(params_domain2[0], params_domain2[1])
             for j in range(n0):
                 if(cube1(grid_points[Id0[j], :]) > 0.5):
                     Id0_1.append(Id0[j])
@@ -103,7 +103,7 @@ def SeparateAndCut(grid, Id1, Id0, errII_m):
 def Bayesian_estimate(points, Id1, Id0):
     pass
 
-def SeparateAndExplore(grid, Id0, a, b, number_manifolds):
+def SeparateAndExplore(grid, Id0, a, b, number_manifolds, _isfirst=True):
     dim = len(a)
     if(len(Id0) == 0):
         #print(a, " , , ", b)
@@ -113,44 +113,23 @@ def SeparateAndExplore(grid, Id0, a, b, number_manifolds):
         median_ind, separation_inds = grid.median(indices=Id0, return_indices=True)
         median_point = grid.points[median_ind]
 
-        propositions = [(a,a)]*number_manifolds
+        propositions = []
         for dir in range(dim):
             new_a, new_b = [a[k] for k in range(dim)], [b[k] for k in range(dim)]
             new_a[dir] = median_point[dir]
             new_b[dir] = median_point[dir]
-            explorations_high = SeparateAndExplore(grid, separation_inds[2*dir], new_a, b, number_manifolds)
-            explorations_low = SeparateAndExplore(grid, separation_inds[2*dir+1], a, new_b, number_manifolds)
+            propositions += SeparateAndExplore(grid, separation_inds[2*dir], new_a, b, number_manifolds, _isfirst=False)
+            propositions += SeparateAndExplore(grid, separation_inds[2*dir+1], a, new_b, number_manifolds, _isfirst=False)
 
-            vols = []
-            vols_high = []
-            vols_low = []
-            for i in range(len(propositions)):
-                vols.append(np.prod([propositions[i][1][k] - propositions[i][0][k] for k in range(dim)]))
+        if(_isfirst):
+            sols = manifold_detection.tools.manifolds.Atlas([])
+            props = [manifold_detection.tools.manifolds.Cube(propositions[i][0], propositions[i][1]) for i in range(len(propositions))]
+            for k in range(number_manifolds):
+                prop_indices = np.argsort([props[i].measure() - (sols.intersect(props[i])).measure() for i in range(len(props))])
+                print(sols.intersect(props[prop_indices[-1]]))
+                print(props[prop_indices[-1]].measure() - (sols.intersect(props[prop_indices[-1]])).measure())
+                sols.update([props[prop_indices[-1]]])
 
-            for i in range(len(explorations_high)):
-                vols_high.append(np.prod([explorations_high[i][1][k] - explorations_high[i][0][k] for k in range(dim)]))
-
-            for i in range(len(explorations_low)):
-                vols_low.append(np.prod([explorations_low[i][1][k] - explorations_low[i][0][k] for k in range(dim)]))
-
-            sorted_props = propositions + explorations_high + explorations_low
-            sorted_indices = np.argsort(np.concatenate((vols, vols_high, vols_low)))
-            propositions = [sorted_props[sorted_indices[-k-1]] for k in range(number_manifolds)]
-
-
-        return propositions
-
-
-
-
-model = tools.manifolds.Atlas([tools.manifolds.Cube([0.0, 0.1], [1.0, 0.6]), tools.manifolds.Cube([0.3, 0.0], [0.7, 1.0])])
-grid = tools.std_grids.LowDiscrepancyGrid([0.0, 0.0], [1.0, 1.0], [2], 100)
-grid.show(model, 0.5)
-
-
-Id1, Id0 = grid.works(model, 0.5)
-print(grid.points[grid.median(indices=Id0)])
-#params, errIIsep1, errIIsep2 = SeparateAndCut(grid, Id1, Id0, 0.0)
-params = SeparateAndExplore(grid, Id0, [0.0, 0.0], [1.0, 1.0], 3)
-
-print(params)
+            return sols
+        else:
+            return propositions
