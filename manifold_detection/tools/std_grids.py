@@ -12,6 +12,10 @@ class Grid():
         self.dim = dim
         self.points = np.zeros((N, self.dim))
 
+    def add(self, points):
+        self.N += points.shape[0]
+        self.points = np.append(self.points, points, axis=0)
+
     def works(self, model, eval_inf):
         Id1 = [] # points working
         Id0 = [] # points not working
@@ -104,18 +108,21 @@ class RegularGrid(Grid):
                 self.points[j, :] = [c[j]]
 
 class CenteredGrid(Grid):
-    def __init__(self, a, b, N, s):
+    def __init__(self, a, b, N, s, model=None, inv_detection=False):
         '''
         Parameters :
         _ a : minimum boundaries of [a, b]
         _ b : maximum boundaries of [a, b]
         _ N : maximal number of points in the grid
         _ s : control of the grid sequence (represents the minimum distance between points of the grid)
+        _ model : model to stop the grid generation. If model=None, the interruption is ignored  (default : None)
+        _ inv_detection : If True (resp. False), stop the grid generation when the model is negative (resp. positive) for a point.
         '''
         a = np.array(a)
         b = np.array(b)
         self.dim = a.shape[0]
         self.points = np.zeros((0,self.dim))
+        self.evals = []
         current_V = [1, 1]
         j = 1
         X = np.zeros(0)
@@ -127,6 +134,19 @@ class CenteredGrid(Grid):
                 j += 1
                 if(j > N):
                     break
+                if(not(model is None)):
+                    test = model(Line[i,:])
+                    self.evals.append(test)
+                    if(test < 0.5 and inv_detection):
+                        break
+                    elif(test > 0.5 and (inv_detection == False)):
+                        break
+
+            if(self.evals[-1] < 0.5 and inv_detection):
+                break
+            elif(self.evals[-1] > 0.5 and (inv_detection == False)):
+                break
+
             current_V = self.step_seq_center(current_V, sc)
 
         self.N = j-1
@@ -196,7 +216,6 @@ class LowDiscrepancyGrid(Grid):
         '''
         s = len(c) # = d - 1
         super().__init__(s+1, N)
-        self.points = np.zeros((N, s+1))
         for i in range(N):
             for j in range(s):
                 self.points[i, j] = (b[j] - a[j])*self.Van_Der_Corput_g(c[j], i) + a[j]

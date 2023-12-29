@@ -103,7 +103,7 @@ def SeparateAndCut(grid, Id1, Id0, errII_m):
 def Bayesian_estimate(points, Id1, Id0):
     pass
 
-def SeparateAndExplore(grid, Id0, a, b, number_manifolds, _isfirst=True):
+def SeparateAndExplore(grid, Id0, a, b, error_max=0.05, number_manifold_limit=100, _isfirst=True):
     dim = len(a)
     if(len(Id0) == 0):
         #print(a, " , , ", b)
@@ -118,16 +118,20 @@ def SeparateAndExplore(grid, Id0, a, b, number_manifolds, _isfirst=True):
             new_a, new_b = [a[k] for k in range(dim)], [b[k] for k in range(dim)]
             new_a[dir] = median_point[dir]
             new_b[dir] = median_point[dir]
-            propositions += SeparateAndExplore(grid, separation_inds[2*dir], new_a, b, number_manifolds, _isfirst=False)
-            propositions += SeparateAndExplore(grid, separation_inds[2*dir+1], a, new_b, number_manifolds, _isfirst=False)
+            propositions += SeparateAndExplore(grid, separation_inds[2*dir], new_a, b, error_max=error_max, _isfirst=False)
+            propositions += SeparateAndExplore(grid, separation_inds[2*dir+1], a, new_b, error_max=error_max, _isfirst=False)
 
         if(_isfirst):
             sols = manifold_detection.tools.manifolds.Atlas([])
+            volmax = np.inf
             props = [manifold_detection.tools.manifolds.Cube(propositions[i][0], propositions[i][1]) for i in range(len(propositions))]
-            for k in range(number_manifolds):
+            for k in range(number_manifold_limit):
                 prop_indices = np.argsort([props[i].measure() - (sols.intersect(props[i])).measure() for i in range(len(props))])
-                print(sols.intersect(props[prop_indices[-1]]))
-                print(props[prop_indices[-1]].measure() - (sols.intersect(props[prop_indices[-1]])).measure())
+                #print(sols.intersect(props[prop_indices[-1]]))
+                if(k == 0):
+                    volmax = props[prop_indices[-1]].measure() - (sols.intersect(props[prop_indices[-1]])).measure()
+                elif((props[prop_indices[-1]].measure() - (sols.intersect(props[prop_indices[-1]])).measure())/volmax < error_max):
+                    break
                 sols.update([props[prop_indices[-1]]])
 
             return sols

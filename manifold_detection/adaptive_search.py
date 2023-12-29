@@ -1,11 +1,20 @@
-import tools.manifolds
+import manifold_detection.tools as tools
 import matplotlib.pyplot as plt
+import numpy as np
 
-torus = tools.manifolds.Torus([0.0, 0.0], 1.0, 3.0)
-
-model = tools.manifolds.Atlas([tools.manifolds.Cube([0.0, 0.1], [0.6, 1.0]), tools.manifolds.Cube([0.0, 0.7], [0.3, 1.0])])
-
-Id1, Id0 = works(model, eval_inf, X)
-params, errIIsep1, errIIsep2 = SeparateAndCut(grid, Id1, Id0, 0.0)
-
-print(params)
+def AdaManifPOST(a, b, alg, model, N):
+    grid = tools.std_grids.CenteredGrid(a, b, N, 10, model=model, inv_detection=True)
+    Id0 = np.where(np.array(grid.evals) < 0.5)[0]
+    #print(Id0)
+    params = alg(grid, Id0, a, b)
+    n = N-grid.N
+    while(n > 0):
+        new_grid = tools.std_grids.CenteredGrid(params.manifolds[0].a, params.manifolds[0].b, n, 10, model=model, inv_detection=True)
+        new_Id0 = np.where(np.array(new_grid.evals) < 0.5)[0]
+        Id0 = np.append(Id0, [grid.N + i for i in new_Id0]).astype(int)
+        #print(grid.points)
+        grid.add(new_grid.points)
+        #print(Id0)
+        params = alg(grid, Id0, a, b)
+        n = n - new_grid.N
+    return params, grid
