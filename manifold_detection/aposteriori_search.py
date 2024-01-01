@@ -100,9 +100,6 @@ def SeparateAndCut(grid, Id1, Id0, errII_m):
 
     return globalparams, global_err1, global_err2
 
-def Bayesian_estimate(points, Id1, Id0):
-    pass
-
 def SeparateAndExplore(grid, Id0, a, b, error_max=0.05, number_manifold_limit=100, _isfirst=True):
     dim = len(a)
     if(len(Id0) == 0):
@@ -137,3 +134,64 @@ def SeparateAndExplore(grid, Id0, a, b, error_max=0.05, number_manifold_limit=10
             return sols
         else:
             return propositions
+
+def Bayesian_estimate(points, Id1, Id0):
+    pass
+
+def ExhaustiveDiminisher(grid, Id0):
+    candidates = []
+    nearest_pt = []
+    for i in range(len(Id0)):
+        x = grid.points[Id0[i]]
+        sorted_Id0 = np.argsort([np.sum(np.power(x - grid.points[Id0[j]], 2)) for j in range(len(Id0))])
+        Neighbour = [grid.points[Id0[sorted_Id0[j]]] for j in range(3)]
+        for j in range(3, len(Id0)):
+            if(sorted_Id0[j] == i):
+                continue
+
+            y3 = grid.points[Id0[sorted_Id0[j]]]
+            interrupt = False
+            for n1 in range(1, len(Neighbour)):
+                y1 = Neighbour[n1]
+                for n2 in range(1, len(Neighbour)):
+                    if(n2 == n1):
+                        continue
+                    y2 = Neighbour[n2]
+                    y3 = grid.points[Id0[sorted_Id0[j]]]
+                    if(np.dot(y3-x, y2-x) < 0 or np.dot(y3-x, y1-x) < 0):
+                        Neighbour.append(y3)
+                        interrupt = True
+                        break
+                if(interrupt):
+                    break
+
+        if(len(Neighbour) == grid.dim+1):
+            candidates.append(np.linalg.solve([Neighbour[k] - Neighbour[k+1] for k in range(len(Neighbour)-1)], [(np.sum(np.power(Neighbour[k], 2)) - np.sum(np.power(Neighbour[k+1], 2)))/2 for k in range(len(Neighbour)-1)]))
+            nearest_pt.append(x)
+
+        elif(len(Neighbour) == grid.dim+2):
+            for j in range(1, len(Neighbour)):
+                selection = Neighbour[:j]+Neighbour[j+1:]
+                candidates.append(np.linalg.solve([selection[k] - selection[k+1] for k in range(len(selection)-1)], [(np.sum(np.power(selection[k], 2)) - np.sum(np.power(selection[k+1], 2)))/2 for k in range(len(selection)-1)]))
+                nearest_pt.append(x)
+        else:
+            print("Something is wrong with this.")
+            print(x, " : : ", Neighbour)
+            continue
+
+    new_candidates = []
+    new_nearest_pt = []
+    for i in range(len(candidates)):
+        if(oneclose(candidates[i], new_candidates, 10**(-10))):
+            continue
+
+        for k, point in enumerate(grid.points):
+            val = np.dot(candidates[i], point - nearest_pt[i]) -  ((np.sum(np.power(point, 2)) - np.sum(np.power(nearest_pt[i], 2)))/2)
+            #print(candidates[i], " , ", val)
+            if(val > 10**(-10)):
+                 break
+            elif(k == len(grid.points)-1):
+                new_candidates.append(candidates[i])
+                new_nearest_pt.append(nearest_pt[i])
+
+    return new_candidates, new_nearest_pt
