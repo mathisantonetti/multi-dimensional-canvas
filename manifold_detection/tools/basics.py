@@ -3,7 +3,7 @@ import numpy as np
 def oneclose(e, L, eps):
     '''
     Parameters :
-    _ L : list of vectors (in matrix shape)
+    _ L : list of elements
     _ e : element possibly near to L
     _ eps : maximum accuracy tolerated of e with one element in L
 
@@ -11,14 +11,14 @@ def oneclose(e, L, eps):
     if e is eps-close to L, returns true
     else returns false
     '''
-    n = L.shape[0]
+    n = len(L)
     if(n == 0):
-        return false
+        return False
 
     for i in range(n):
-        if(norm(e - L[i, :]) > eps):
-            return false
-    return true
+        if(np.linalg.norm(e - L[i]) < eps):
+            return True
+    return False
 
 def updateVecInBase(i, base):
     '''

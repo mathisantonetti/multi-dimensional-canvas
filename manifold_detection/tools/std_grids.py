@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import manifold_detection.tools.manifolds
 
 class Grid():
     def __init__(self, dim, N):
@@ -83,6 +84,10 @@ class Grid():
             return ind, list_inds
         else:
             return ind
+
+    def extension(self, a, b, manifold_type="Cube"):
+        for point in self.points:
+            point_extension = Cube(a, b, index=point, grid=self)
 
 
 

@@ -1,8 +1,25 @@
 import numpy as np
 
 class Atlas():
-    def __init__(self, manifolds):
+    def __init__(self, manifolds, parameters=None, shape=None, error_max=0.05, number_manifold_limit=100):
         self.manifolds = manifolds
+
+        if((shape is None) == False):
+            volmax = np.inf
+            params = None
+            if(shape == "Cube"):
+                params = [Cube(parameters[i][0], parameters[i][1]) for i in range(len(parameters))]
+            elif(shape == "Torus"):
+                params = [Torus(parameters[i][0], parameters[i][1], parameters[i][2]) for i in range(len(parameters))]
+
+            for k in range(number_manifold_limit):
+                param_indices = np.argsort([params[i].measure() - (self.intersect(params[i])).measure() for i in range(len(params))])
+                #print(sols.intersect(props[prop_indices[-1]]))
+                if(k == 0):
+                    volmax = params[param_indices[-1]].measure() - (self.intersect(params[param_indices[-1]])).measure()
+                elif((params[param_indices[-1]].measure() - (self.intersect(params[param_indices[-1]])).measure())/volmax < error_max):
+                    break
+                self.update([params[param_indices[-1]]])
 
     def update(self, manifolds):
         self.manifolds = self.manifolds + manifolds
@@ -45,7 +62,7 @@ class Atlas():
 
 
 class Cube():
-    def __init__(self, a, b):
+    def __init__(self, a, b, index=None, grid=None):
         self.a = a
         self.b = b
 
@@ -53,6 +70,54 @@ class Cube():
             self.a = np.array(self.a)
             self.b = np.array(self.b)
             self.d = self.b.shape[0]
+
+        if(not(index is None) and not(grid is None)):
+            new_a, new_b = np.copy(a), np.copy(b)
+            dims_to_explore = [i for i in range(2*grid.dim)]
+
+            for dim in range(2*grid.dim):
+                val = np.inf
+                index_val = -1
+                dim_to_remove = -1
+                for i in range(len(grid.points)):
+                    if(i == index):
+                        continue
+
+                    flag = False
+                    for s in range(grid.dim):
+                        if(grid.points[i][s] >= new_b[s] or grid.points[i][s] <= new_a[s]):
+                            flag = True
+                            break
+
+                    if(flag):
+                        continue
+
+                    cand_val, cand_dim = -1, -1
+                    for s in dims_to_explore:
+                        new_val = ((-1)**s)*(grid.points[i][s//2] - grid.points[index][s//2])
+                        #print(s, " , ", new_val, " : ", val)
+                        if(new_val > 0):
+                            if(new_val > cand_val):
+                                cand_val = new_val
+                                cand_dim = s
+
+                    if(cand_val < val and cand_dim != -1):
+                        val = cand_val
+                        dim_to_remove = cand_dim
+                        index_val = i
+
+                if(dim_to_remove == -1):
+                    break
+
+                s = dim_to_remove
+                if(s%2 == 0):
+                    new_b[s//2] = grid.points[index_val][s//2]
+                else:
+                    new_a[s//2] = grid.points[index_val][s//2]
+                dims_to_explore.remove(s)
+
+            self.a = new_a
+            self.b = new_b
 
     def measure(self):
         if(self.a is None or self.b is None):
@@ -94,4 +159,3 @@ class Torus():
     def __call__(self, x):
         x = np.array(x)
         return (np.linalg.norm(x - self.center) < self.r_ext) +(np.linalg.norm(x-self.center) > self.r_int)
-

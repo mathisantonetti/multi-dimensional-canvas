@@ -1,6 +1,7 @@
 import manifold_detection.tools.manifolds
 import manifold_detection.tools.std_grids
 from manifold_detection.tools.basics import *
+from scipy.spatial import Voronoi
 import copy
 import numpy as np
 
@@ -119,26 +120,167 @@ def SeparateAndExplore(grid, Id0, a, b, error_max=0.05, number_manifold_limit=10
             propositions += SeparateAndExplore(grid, separation_inds[2*dir+1], a, new_b, error_max=error_max, _isfirst=False)
 
         if(_isfirst):
-            sols = manifold_detection.tools.manifolds.Atlas([])
-            volmax = np.inf
-            props = [manifold_detection.tools.manifolds.Cube(propositions[i][0], propositions[i][1]) for i in range(len(propositions))]
-            for k in range(number_manifold_limit):
-                prop_indices = np.argsort([props[i].measure() - (sols.intersect(props[i])).measure() for i in range(len(props))])
-                #print(sols.intersect(props[prop_indices[-1]]))
-                if(k == 0):
-                    volmax = props[prop_indices[-1]].measure() - (sols.intersect(props[prop_indices[-1]])).measure()
-                elif((props[prop_indices[-1]].measure() - (sols.intersect(props[prop_indices[-1]])).measure())/volmax < error_max):
-                    break
-                sols.update([props[prop_indices[-1]]])
-
-            return sols
+            return manifold_detection.tools.manifolds.Atlas([], parameters=propositions, shape="Cube")
         else:
             return propositions
+
+def Compute_LECH(points, a, b):
+    '''
+    Parameters :
+    _ points : a list of points assumed to be sorted in x (first coordinate)
+    _ a : left-bottomost point of the bounding hypercube
+    _ b : right-topmost point of the bounding hypercube
+
+    Returns :
+    _ LECH : The largest empty corner hypercube
+    '''
+    # Step 0
+    CL = points[:len(points)//2]
+    CR = points[len(points)//2:]
+
+    # Step 1
+    if(len(CL) > 0):
+        new_b, new_a = b, a
+        new_b[0] = points[len(points)//2][0]
+        new_a[0] = points[len(points)//2][0]
+        res_left = Compute_LECH(points[:len(points)//2], a, new_b)
+        res_right = Compute_LECH(points[len(points)//2:], new_a, b)
+
+    CL = np.sort(CL)[::-1]
+    CR = np.sort(CR)[::-1]
+
+    # Step 2
+    s = len(CL)
+    bottom_mates = []
+    for i in range(s):
+        for j in range(bottom_mates[-1], len(CR)):
+            if(CR[j][1] > CL[i]):
+                bottom_mates.append(j)
+                break
+
+    # Step 3
+    stack = [bottom_mates[0]]
+    CRprime = [CR[j] for j in range(len(CR))]
+    for i in range(1, s):
+        stack.append(bottom_mates[i-1])
+        if(bottom_mates[i] == bottom_mates[i-1]):
+            continue
+
+        for j in range(bottom_mates[i-1]+1, s):
+            if(j == bottom_mates[i]):
+                break
+
+            while(CR[j][0] < CR[stack[-1]][0] and stack[-1] >= bottom_mates[i-1]):
+                CRprime.pop(stack[-1])
+                stack.pop()
+
+            stack.append(j)
+
+def NoForget(grid, sorted_Id0, side_HC, update_HC, side="left"):
+    for side_hc in side_HC:
+        a_side, b_side = side_hc
+
+        ab_side = np.copy(a_side)
+        if(side == "right"):
+            ab_side = b_side
+
+        for i in range((len(sorted_Id0)+1)//2):
+            candidate_pt = grid.points[sorted_Id0[len(sorted_Id0)//2+i]]
+            #print(ab_side, "  ,  ,  ", candidate_pt)
+            if(ab_side[0] != candidate_pt[0]):
+                break
+            if((a_side <= candidate_pt).all() and (candidate_pt <= b_side).all()):
+                update_HC.append(side_hc)
+
+        for i in range(1, len(sorted_Id0)//2):
+            candidate_pt = grid.points[sorted_Id0[len(sorted_Id0)//2-i]]
+            if(ab_side[0] != candidate_pt[0]):
+                break
+            if((a_side <= candidate_pt).all() and (candidate_pt <= b_side).all()):
+                update_HC.append(side_hc)
+
+def compute_MLHC(grid, a, b, Id0=None, is_sorted=False, right_side=False):
+    if(Id0 is None):
+        Id0 = np.arange(len(grid.points))
+
+    #print(Id0, " ,, ", a, b)
+    if(len(Id0) == 0):
+        return [[a,b]], []
+
+    sorted_Id0 = None
+    if(is_sorted):
+        sorted_Id0 = Id0
+    else:
+        sorted_inds = np.argsort([grid.points[Id0[j]][0] for j in range(len(Id0))])
+        sorted_Id0 = [Id0[sorted_inds[k]] for k in range(len(sorted_inds))]
+
+    separation_point = grid.points[sorted_Id0[len(sorted_Id0)//2]]
+
+    new_b, new_a = np.copy(b), np.copy(a)
+    new_b[0] = separation_point[0]
+    new_a[0] = separation_point[0]
+    right_HC, other_HC1 = compute_MLHC(grid, a, new_b, Id0 = sorted_Id0[:len(sorted_Id0)//2], is_sorted=True, right_side=True)
+    left_HC, other_HC2 = compute_MLHC(grid, new_a, b, Id0 = sorted_Id0[len(sorted_Id0)//2+1:], is_sorted=True, right_side=False)
+
+    side_HC, other_HC = [], other_HC1 + other_HC2
+
+    # Do not forget
+    NoForget(grid, sorted_Id0, left_HC, other_HC)
+    NoForget(grid, sorted_Id0, right_HC, other_HC, side="right")
+
+    # Fusion of side hypercubes
+    for left_hc in left_HC:
+        for right_hc in right_HC:
+            a_left, b_left = left_hc
+            a_right, b_right = right_hc
+            a_fused, b_fused = np.maximum(a_left, a_right), np.minimum(b_left, b_right)
+            a_fused[0] = a_right[0]
+            b_fused[0] = b_left[0]
+            #print(a_left, " , ", a_right, " , ", b_left, " , ", b_right)
+            #print(a_fused, " : : ", b_fused)
+            if((a_fused >= b_fused).any() == False):
+                if((right_side and b[0] == b_fused[0]) or (right_side == False and a[0] == a_fused[0])):
+                    for dir in range(1,grid.dim):
+                        b_cand, a_cand = np.copy(b_fused), np.copy(a_fused)
+
+                    if(a_fused[dir] < separation_point[dir] and separation_point[dir] < b_fused[dir]):
+                        b_cand[dir] = separation_point[dir]
+                        a_cand[dir] = separation_point[dir]
+
+                        if((right_side and b[0] == b_fused[0]) or (right_side == False and a[0] == a_fused[0])):
+                            side_HC.append([a_cand,b_fused])
+                            side_HC.append([a_fused, b_cand])
+                        else:
+                            other_HC.append([a_cand,b_fused])
+                            other_HC.append([a_fused,b_cand])
+                    else:
+                        if((right_side and b[0] == b_fused[0]) or (right_side == False and a[0] == a_fused[0])):
+                            side_HC.append([a_fused, b_fused])
+                        else:
+                            other_HC.append([a_fused, b_fused])
+
+    return side_HC, other_HC
+
+def MLHC(grid, a, b, Id0=None):
+    side_HC, other_HC = compute_MLHC(grid, a, b, Id0=Id0)
+    result = manifold_detection.tools.manifolds.Atlas([], parameters=side_HC+other_HC, shape="Cube")
+
+    return result
+
 
 def Bayesian_estimate(points, Id1, Id0):
     pass
 
 def ExhaustiveDiminisher(grid, Id0):
+    '''
+    Parameters :
+    _ grid : the grid
+    _ Id0 : indices of the points to take into account
+
+    Returns :
+    _ candidates : the estimated vertices of the Voronoi diagram.
+    _ nearest_pt : the list of the nearest points associated to the vertices of same index.
+    '''
     candidates = []
     nearest_pt = []
     for i in range(len(Id0)):
@@ -150,37 +292,46 @@ def ExhaustiveDiminisher(grid, Id0):
                 continue
 
             y3 = grid.points[Id0[sorted_Id0[j]]]
-            interrupt = False
+            isNotNeighbour = False
             for n1 in range(1, len(Neighbour)):
                 y1 = Neighbour[n1]
                 for n2 in range(1, len(Neighbour)):
                     if(n2 == n1):
                         continue
                     y2 = Neighbour[n2]
-                    y3 = grid.points[Id0[sorted_Id0[j]]]
-                    if(np.dot(y3-x, y2-x) < 0 or np.dot(y3-x, y1-x) < 0):
-                        Neighbour.append(y3)
-                        interrupt = True
+                    if(np.dot(y3-x, y2-x) > 0 and np.dot(y3-x, y1-x) > 0 and (np.dot(y2 - x, y2 - y3) < 0 or np.dot(y1 - x, y1 - y3) < 0)):
+                        isNotNeighbour = True
                         break
-                if(interrupt):
+                if(isNotNeighbour):
                     break
+            if(isNotNeighbour == False):
+                Neighbour.append(y3)
 
-        if(len(Neighbour) == grid.dim+1):
-            candidates.append(np.linalg.solve([Neighbour[k] - Neighbour[k+1] for k in range(len(Neighbour)-1)], [(np.sum(np.power(Neighbour[k], 2)) - np.sum(np.power(Neighbour[k+1], 2)))/2 for k in range(len(Neighbour)-1)]))
-            nearest_pt.append(x)
-
-        elif(len(Neighbour) == grid.dim+2):
-            for j in range(1, len(Neighbour)):
-                selection = Neighbour[:j]+Neighbour[j+1:]
-                candidates.append(np.linalg.solve([selection[k] - selection[k+1] for k in range(len(selection)-1)], [(np.sum(np.power(selection[k], 2)) - np.sum(np.power(selection[k+1], 2)))/2 for k in range(len(selection)-1)]))
-                nearest_pt.append(x)
+        if(len(Neighbour) >= grid.dim+1):
+            def cands(I):
+                if(len(I) == grid.dim+1):
+                    #sol = np.linalg.lstsq([Neighbour[I[k]] - Neighbour[I[k+1]] for k in range(len(I)-1)], [(np.sum(np.power(Neighbour[I[k]], 2)) - np.sum(np.power(Neighbour[I[k+1]], 2)))/2 for k in range(len(I)-1)], rcond=None)[0]
+                    A = [Neighbour[I[k]] - Neighbour[I[k+1]] for k in range(len(I)-1)]
+                    if(np.linalg.cond(A) > 10**(10)):
+                        #print("doesn : ", [Neighbour[I[k]] for k in range(len(I))])
+                        return []
+                    else:
+                        return [np.linalg.solve([Neighbour[I[k]] - Neighbour[I[k+1]] for k in range(len(I)-1)], [(np.sum(np.power(Neighbour[I[k]], 2)) - np.sum(np.power(Neighbour[I[k+1]], 2)))/2 for k in range(len(I)-1)])]
+                else:
+                    L = []
+                    for i in range(I[-1]+1, len(Neighbour)-grid.dim+len(I)):
+                        L += cands(I+[i])
+                    return L
+            new_cands = cands([0])
+            candidates += new_cands
+            nearest_pt += len(new_cands)*[x]
         else:
             print("Something is wrong with this.")
             print(x, " : : ", Neighbour)
-            continue
 
     new_candidates = []
     new_nearest_pt = []
+    #print(candidates)
     for i in range(len(candidates)):
         if(oneclose(candidates[i], new_candidates, 10**(-10))):
             continue
@@ -195,3 +346,21 @@ def ExhaustiveDiminisher(grid, Id0):
                 new_nearest_pt.append(nearest_pt[i])
 
     return new_candidates, new_nearest_pt
+
+def MLHS(grid, a, b):
+    points = np.array(grid.points)
+    vor = Voronoi(points)
+    radius = []
+    max_c = None
+    max_radius = 0.0
+    for c in vor.vertices:
+        if((c<a).any() or (c>b).any()):
+            continue
+
+        radius.append(np.min(np.linalg.norm(c[None, :] - points, axis=1)))
+        if(radius[-1] > max_radius):
+            max_c = c
+            max_radius = radius[-1]
+
+    #index = np.argmax(radius)
+    return max_c, max_radius
